@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.qso-graph/pota-mcp -->
 # pota-mcp
 
 MCP server for [Parks on the Air (POTA)](https://pota.app/) — live activator spots, park info, activator/hunter stats, and scheduled activations through any MCP-compatible AI assistant.
