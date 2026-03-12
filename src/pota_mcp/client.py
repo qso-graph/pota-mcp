@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -343,3 +344,44 @@ class POTAClient:
 
         self._cache_set(key, data, _LOCATION_TTL)
         return data
+
+    @staticmethod
+    def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Great-circle distance in km between two points."""
+        R = 6371.0
+        d_lat = math.radians(lat2 - lat1)
+        d_lon = math.radians(lon2 - lon1)
+        a = (
+            math.sin(d_lat / 2) ** 2
+            + math.cos(math.radians(lat1))
+            * math.cos(math.radians(lat2))
+            * math.sin(d_lon / 2) ** 2
+        )
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    def nearby_parks(
+        self,
+        location: str,
+        latitude: float,
+        longitude: float,
+        radius_km: float = 50.0,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """Find POTA parks near a point within a location."""
+        parks = self.location_parks(location)
+        nearby = []
+        for park in parks:
+            plat = park.get("latitude")
+            plon = park.get("longitude")
+            if plat is None or plon is None:
+                continue
+            try:
+                dist = self._haversine(latitude, longitude, float(plat), float(plon))
+            except (ValueError, TypeError):
+                continue
+            if dist <= radius_km:
+                entry = dict(park)
+                entry["distance_km"] = round(dist, 1)
+                nearby.append(entry)
+        nearby.sort(key=lambda p: p["distance_km"])
+        return nearby[:limit]
