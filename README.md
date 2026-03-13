@@ -21,6 +21,7 @@ pip install pota-mcp
 | `pota_user_stats` | Activator/hunter stats by callsign |
 | `pota_scheduled` | Upcoming scheduled activations |
 | `pota_location_parks` | All parks in a state/province/country |
+| `pota_nearby_parks` | Find parks near a point — great for 2-fer planning |
 
 ## Quick Start
 
