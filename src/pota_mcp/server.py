@@ -38,10 +38,10 @@ def _get_client() -> POTAClient:
 
 @mcp.tool()
 def pota_spots(
-    band: str = "",
-    mode: str = "",
-    location: str = "",
-    program: str = "",
+    band: str | None = "",
+    mode: str | None = "",
+    location: str | None = "",
+    program: str | None = "",
 ) -> dict[str, Any]:
     """Get current POTA activator spots.
 
@@ -58,6 +58,11 @@ def pota_spots(
         List of active spots with activator, frequency, park, grid, and coordinates.
     """
     try:
+        # Coerce None → "" (llama.cpp/mcpo sends null for optional params)
+        band = band or ""
+        mode = mode or ""
+        location = location or ""
+        program = program or ""
         spots = _get_client().spots(
             band=band or None,
             mode=mode or None,
@@ -157,8 +162,8 @@ def pota_nearby_parks(
     location: str,
     latitude: float,
     longitude: float,
-    radius_km: float = 50.0,
-    limit: int = 25,
+    radius_km: float | None = 50.0,
+    limit: int | None = 25,
 ) -> dict[str, Any]:
     """Find POTA parks near a geographic point.
 
@@ -176,6 +181,9 @@ def pota_nearby_parks(
         Parks within radius, sorted by distance, with distance_km field added.
     """
     try:
+        # Coerce None → defaults (llama.cpp/mcpo sends null for optional params)
+        radius_km = radius_km if radius_km is not None else 50.0
+        limit = limit if limit is not None else 25
         radius_km = min(max(radius_km, 1.0), 500.0)
         limit = min(max(limit, 1), 100)
         parks = _get_client().nearby_parks(
