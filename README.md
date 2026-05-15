@@ -22,6 +22,7 @@ pip install pota-mcp
 | `pota_scheduled` | Upcoming scheduled activations |
 | `pota_location_parks` | All parks in a state/province/country |
 | `pota_nearby_parks` | Find parks near a point — great for 2-fer planning |
+| `get_version_info` | Service version + upstream spec version (fleet identity attestation) |
 
 ## Quick Start
 
