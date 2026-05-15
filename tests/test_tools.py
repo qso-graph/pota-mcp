@@ -287,3 +287,48 @@ class TestEdgeCases:
         """POTA-L2-045: Very close points → near-zero distance."""
         dist = POTAClient._haversine(43.617, -115.993, 43.6171, -115.9931)
         assert dist < 0.1  # Less than 100 meters
+
+
+# ---------------------------------------------------------------------------
+# POTA-L2-046..050: get_version_info — fleet identity attestation
+# ---------------------------------------------------------------------------
+
+
+class TestGetVersionInfo:
+    """Tracks IONIS-AI/ionis-devel#49 — fleet get_version_info convention."""
+
+    def test_returns_service_name(self):
+        """POTA-L2-046: payload includes service_name = 'pota-mcp'."""
+        from pota_mcp.server import _version_info_payload
+
+        assert _version_info_payload()["service_name"] == "pota-mcp"
+
+    def test_returns_service_version(self):
+        """POTA-L2-047: service_version matches package __version__."""
+        from pota_mcp import __version__
+        from pota_mcp.server import _version_info_payload
+
+        assert _version_info_payload()["service_version"] == __version__
+
+    def test_returns_spec_version(self):
+        """POTA-L2-048: spec_version pins the POTA API revision."""
+        from pota_mcp.server import _version_info_payload
+
+        assert _version_info_payload()["spec_version"] == "pota-api-v1"
+
+    def test_payload_keys_are_required_set(self):
+        """POTA-L2-049: payload has exactly the required keys (no extras yet)."""
+        from pota_mcp.server import _version_info_payload
+
+        result = _version_info_payload()
+        required = {"service_name", "service_version", "spec_version"}
+        assert required.issubset(set(result.keys()))
+
+    def test_all_values_are_strings(self):
+        """POTA-L2-050: all returned values are strings (JSON-safe envelope)."""
+        from pota_mcp.server import _version_info_payload
+
+        result = _version_info_payload()
+        for k in ("service_name", "service_version", "spec_version"):
+            assert isinstance(result[k], str), f"{k} should be str, got {type(result[k])}"
+            assert result[k], f"{k} should be non-empty"
