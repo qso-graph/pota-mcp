@@ -1,6 +1,9 @@
 <!-- mcp-name: io.github.qso-graph/pota-mcp -->
 # pota-mcp
 
+[![PyPI](https://img.shields.io/pypi/v/pota-mcp?label=PyPI&color=blue)](https://pypi.org/project/pota-mcp/)
+[![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%3Fsearch%3Dpota-mcp&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry&color=blue)](https://registry.modelcontextprotocol.io/v0/servers?search=pota-mcp)
+
 MCP server for [Parks on the Air (POTA)](https://pota.app/) — live activator spots, park info, activator/hunter stats, and scheduled activations through any MCP-compatible AI assistant.
 
 Part of the [qso-graph](https://qso-graph.io/) project. **No authentication required** — all POTA endpoints are public.
