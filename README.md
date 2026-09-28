@@ -11,7 +11,8 @@ Part of the [qso-graph](https://qso-graph.io/) project. **No authentication requ
 ## Install
 
 ```bash
-pip install pota-mcp
+uvx pota-mcp            # run it; nothing to install
+pip install pota-mcp    # or install it into your own environment
 ```
 
 ## Tools
@@ -43,7 +44,8 @@ Add to `claude_desktop_config.json` (`~/Library/Application Support/Claude/` on 
 {
   "mcpServers": {
     "pota": {
-      "command": "pota-mcp"
+      "command": "uvx",
+      "args": ["pota-mcp"]
     }
   }
 }
@@ -57,7 +59,8 @@ Add to `.claude/settings.json`:
 {
   "mcpServers": {
     "pota": {
-      "command": "pota-mcp"
+      "command": "uvx",
+      "args": ["pota-mcp"]
     }
   }
 }
@@ -69,7 +72,8 @@ Add to `.claude/settings.json`:
 {
   "mcpServers": {
     "pota": {
-      "command": "pota-mcp"
+      "command": "uvx",
+      "args": ["pota-mcp"]
     }
   }
 }
@@ -83,7 +87,8 @@ Add to `.cursor/mcp.json` (project-level) or `~/.cursor/mcp.json` (global):
 {
   "mcpServers": {
     "pota": {
-      "command": "pota-mcp"
+      "command": "uvx",
+      "args": ["pota-mcp"]
     }
   }
 }
@@ -97,7 +102,8 @@ Add to `.vscode/mcp.json` in your workspace:
 {
   "servers": {
     "pota": {
-      "command": "pota-mcp"
+      "command": "uvx",
+      "args": ["pota-mcp"]
     }
   }
 }
@@ -111,11 +117,14 @@ Add to `~/.gemini/settings.json` (global) or `.gemini/settings.json` (project):
 {
   "mcpServers": {
     "pota": {
-      "command": "pota-mcp"
+      "command": "uvx",
+      "args": ["pota-mcp"]
     }
   }
 }
 ```
+
+Installed with pip instead? Use `"command": "pota-mcp"` in any config above.
 
 ### Ask questions
 
@@ -152,7 +161,8 @@ Then open the MCP Inspector at `http://localhost:8006`.
 ```bash
 git clone https://github.com/qso-graph/pota-mcp.git
 cd pota-mcp
-pip install -e .
+uv sync --group dev
+uv run pytest
 ```
 
 ## License

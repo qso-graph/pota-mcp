@@ -35,6 +35,10 @@ Issues = "https://github.com/qso-graph/pota-mcp/issues"
 [project.scripts]
 pota-mcp = "pota_mcp.server:main"
 
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
