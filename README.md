@@ -12,7 +12,6 @@ Part of the [qso-graph](https://qso-graph.io/) project. **No authentication requ
 
 ```bash
 uvx pota-mcp            # run it; nothing to install
-pip install pota-mcp    # or install it into your own environment
 ```
 
 ## Tools
@@ -123,8 +122,6 @@ Add to `~/.gemini/settings.json` (global) or `.gemini/settings.json` (project):
   }
 }
 ```
-
-Installed with pip instead? Use `"command": "pota-mcp"` in any config above.
 
 ### Ask questions
 
