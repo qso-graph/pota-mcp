@@ -1,6 +1,6 @@
 [project]
 name = "pota-mcp"
-version = "0.2.3"
+version = "0.2.4"
 description = "MCP server for Parks on the Air — park lookup, activator/hunter stats, spots"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
@@ -28,7 +28,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://qso-graph.io"
-Documentation = "https://qso-graph.io"
+Documentation = "https://qso-graph.io/servers/pota/"
 Repository = "https://github.com/qso-graph/pota-mcp"
 Issues = "https://github.com/qso-graph/pota-mcp/issues"
 
