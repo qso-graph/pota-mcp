@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.6] — 2026-10-09
 
 - `pota_user_stats` returns only callsign, name, activator, attempts, hunter, awards and endorsements. POTA's `qth` (which can hold an address) and `gravatar` (a hash of the user's email address) are no longer passed through (#15).
+- Release gate: the #15 security test reads the source instead of importing the package, because the gate runs `test_security.py` without installing it. The 0.2.6 publish failed on this; nothing was published.
 
 ## [0.2.5] — 2026-10-07
 
