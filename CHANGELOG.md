@@ -5,6 +5,10 @@ All notable changes to `pota-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- `pota_user_stats` returns only callsign, name, activator, attempts, hunter, awards and endorsements. POTA's `qth` (which can hold an address) and `gravatar` (a hash of the user's email address) are no longer passed through (#15).
+
 ## [0.2.5] — 2026-10-07
 
 - LICENSE: the full GPL-3.0 text. The file held only its opening and a link, so GitHub detected no licence.

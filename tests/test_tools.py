@@ -198,6 +198,15 @@ class TestUserStatsTool:
         assert "hunter" in result
         assert result["activator"]["activations"] == 558
 
+    def test_drops_personal_fields(self, client):
+        """POTA-L2-034: user_stats never returns qth or gravatar (#15)."""
+        result = client.user_stats("K4SWL")
+        assert "qth" not in result
+        assert "gravatar" not in result
+        assert set(result) <= {
+            "callsign", "name", "activator", "attempts", "hunter", "awards", "endorsements",
+        }
+
     def test_uppercase_callsign(self, client):
         """POTA-L2-033: user_stats uppercases callsign."""
         result = client.user_stats("k4swl")
