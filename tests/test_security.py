@@ -81,11 +81,28 @@ def test_no_eval_exec():
                 assert False, f"eval/exec in {py_file.name}:{i}: {stripped.strip()}"
 
 
-def test_user_stats_drops_personal_fields(monkeypatch):
-    """No republishing of personal data: qth and gravatar never leave user_stats (#15)."""
-    monkeypatch.setenv("POTA_MCP_MOCK", "1")
-    from pota_mcp.client import POTAClient
 
-    result = POTAClient().user_stats("K4SWL")
-    assert "qth" not in result
-    assert "gravatar" not in result
+def test_user_stats_drops_personal_fields():
+    """No republishing of personal data: user_stats returns an allowlist without qth or gravatar (#15).
+
+    Static, like the rest of this file: the release gate runs it without installing the package.
+    """
+    import ast
+
+    source = (SRC_DIR / "pota_mcp" / "client.py").read_text()
+    tree = ast.parse(source)
+
+    allowlist = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_USER_STATS_FIELDS" for t in node.targets
+        ):
+            allowlist = ast.literal_eval(node.value)
+    assert allowlist is not None, "_USER_STATS_FIELDS allowlist is missing from client.py"
+    assert "qth" not in allowlist
+    assert "gravatar" not in allowlist
+
+    user_stats = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "user_stats"
+    )
+    assert "_USER_STATS_FIELDS" in ast.unparse(user_stats), "user_stats does not apply the allowlist"
