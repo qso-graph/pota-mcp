@@ -99,6 +99,7 @@ def test_user_stats_live(client):
     """POTA-L3-007: user_stats('K4SWL') returns callsign with activator/hunter stats."""
     result = client.user_stats(KNOWN_USER)
     assert "error" not in result, f"user_stats returned error: {result}"
+    assert "qth" not in result and "gravatar" not in result
     assert result.get("callsign") == KNOWN_USER, f"Expected callsign {KNOWN_USER}, got: {result.get('callsign')}"
     assert isinstance(result.get("activator"), dict), "activator should be a dict"
     assert isinstance(result.get("hunter"), dict), "hunter should be a dict"
