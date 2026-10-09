@@ -21,7 +21,7 @@ uvx pota-mcp            # run it; nothing to install
 | `pota_spots` | Current activator spots with park/grid enrichment and optional filters |
 | `pota_park_info` | Park details by reference code (name, grid, type, agencies, website) |
 | `pota_park_stats` | Activation and QSO counts for a park |
-| `pota_user_stats` | Activator/hunter stats by callsign |
+| `pota_user_stats` | Activator/hunter stats by callsign (callsign, name, activator, attempts, hunter, awards, endorsements; no address or email-derived fields) |
 | `pota_scheduled` | Upcoming scheduled activations |
 | `pota_location_parks` | All parks in a state/province/country |
 | `pota_nearby_parks` | Find parks near a point — great for 2-fer planning |

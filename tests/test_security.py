@@ -79,3 +79,13 @@ def test_no_eval_exec():
                 continue
             if re.search(r'\b(?:eval|exec)\s*\(', stripped):
                 assert False, f"eval/exec in {py_file.name}:{i}: {stripped.strip()}"
+
+
+def test_user_stats_drops_personal_fields(monkeypatch):
+    """No republishing of personal data: qth and gravatar never leave user_stats (#15)."""
+    monkeypatch.setenv("POTA_MCP_MOCK", "1")
+    from pota_mcp.client import POTAClient
+
+    result = POTAClient().user_stats("K4SWL")
+    assert "qth" not in result
+    assert "gravatar" not in result

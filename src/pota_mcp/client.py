@@ -105,11 +105,26 @@ _MOCK_PARK_STATS = {
 _MOCK_USER_STATS = {
     "callsign": "K4SWL",
     "name": "Thomas Witherspoon",
+    "qth": "123 Example Road",
+    "gravatar": "0123456789abcdef0123456789abcdef",
     "activator": {"activations": 558, "parks": 129, "qsos": 12638},
     "hunter": {"parks": 1455, "qsos": 2597},
     "awards": 41,
     "endorsements": 123,
 }
+
+# Fields of /stats/user/{call} that pota_user_stats returns. Anything else POTA adds is
+# dropped: qso-graph tools don't republish personal details (qth can hold an address, and
+# gravatar is a hash of the user's email address).
+_USER_STATS_FIELDS = (
+    "callsign",
+    "name",
+    "activator",
+    "attempts",
+    "hunter",
+    "awards",
+    "endorsements",
+)
 
 _MOCK_SCHEDULED = [
     {
@@ -309,6 +324,7 @@ class POTAClient:
         if not data:
             return {"callsign": call, "error": "Not found"}
 
+        data = {k: data[k] for k in _USER_STATS_FIELDS if k in data}
         self._cache_set(key, data, _STATS_TTL)
         return data
 
