@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import time
-import re
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -35,7 +35,7 @@ def _is_mock() -> bool:
 # Mock data
 # ---------------------------------------------------------------------------
 
-_MOCK_SPOTS = [
+_MOCK_SPOTS: list[dict[str, Any]] = [
     {
         "spotId": 47944496,
         "activator": "K4SWL",
@@ -76,7 +76,7 @@ _MOCK_SPOTS = [
     },
 ]
 
-_MOCK_PARK_INFO = {
+_MOCK_PARK_INFO: dict[str, Any] = {
     "reference": "US-0001",
     "name": "Acadia",
     "latitude": 44.31,
@@ -96,14 +96,14 @@ _MOCK_PARK_INFO = {
     "firstActivationDate": "2010-06-26",
 }
 
-_MOCK_PARK_STATS = {
+_MOCK_PARK_STATS: dict[str, Any] = {
     "reference": "US-0001",
     "attempts": 562,
     "activations": 496,
     "contacts": 17288,
 }
 
-_MOCK_USER_STATS = {
+_MOCK_USER_STATS: dict[str, Any] = {
     "callsign": "K4SWL",
     "name": "Thomas Witherspoon",
     "qth": "123 Example Road",
@@ -165,7 +165,7 @@ def regions(item: dict[str, Any]) -> list[str]:
 
 
 # From the live endpoint, GET /park/activations/US-0062?count=N, 2026-10-10.
-_MOCK_PARK_ACTIVATIONS = [
+_MOCK_PARK_ACTIVATIONS: list[dict[str, Any]] = [
     {
         "activeCallsign": "KD0JYV", "qso_date": "20260826", "totalQSOs": 12,
         "qsosCW": 0, "qsosDATA": 12, "qsosPHONE": 0, "locationDesc": "US-NY",
@@ -178,7 +178,7 @@ _MOCK_PARK_ACTIVATIONS = [
 
 # From the live endpoint, GET /park/leaderboard/{reference}, 2026-10-10. POTA
 # returns three boards of five, each row a callsign and a count.
-_MOCK_PARK_LEADERBOARD = {
+_MOCK_PARK_LEADERBOARD: dict[str, Any] = {
     "activations": [
         {"callsign": "KD2WZW", "count": 5},
         {"callsign": "N1NDN", "count": 3},
@@ -193,7 +193,7 @@ _MOCK_PARK_LEADERBOARD = {
     ],
 }
 
-_MOCK_SCHEDULED = [
+_MOCK_SCHEDULED: list[dict[str, Any]] = [
     {
         "scheduledActivationId": 12345,
         "activator": "N3VEM",
@@ -208,7 +208,7 @@ _MOCK_SCHEDULED = [
     },
 ]
 
-_MOCK_LOCATION_PARKS = [
+_MOCK_LOCATION_PARKS: list[dict[str, Any]] = [
     {
         "reference": "US-4567",
         "name": "Boise National Forest",
@@ -296,7 +296,7 @@ class POTAClient:
     ) -> list[dict[str, Any]]:
         """Get current activator spots."""
         key = f"spots:{band}:{mode}:{location}:{program}"
-        cached = self._cache_get(key)
+        cached: list[dict[str, Any]] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -341,7 +341,7 @@ class POTAClient:
         """Get park details by reference code."""
         ref = reference.upper()
         key = f"park:{ref}"
-        cached = self._cache_get(key)
+        cached: dict[str, Any] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -360,7 +360,7 @@ class POTAClient:
         """Get activation/QSO counts for a park."""
         ref = reference.upper()
         key = f"park_stats:{ref}"
-        cached = self._cache_get(key)
+        cached: dict[str, Any] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -383,7 +383,7 @@ class POTAClient:
         """
         ref = reference.strip().upper()
         key = f"park_activations:{ref}:{count}"
-        cached = self._cache_get(key)
+        cached: list[dict[str, Any]] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -414,7 +414,7 @@ class POTAClient:
         """
         ref = reference.strip().upper()
         key = f"park_leaderboard:{ref}:{limit}"
-        cached = self._cache_get(key)
+        cached: dict[str, Any] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -427,7 +427,10 @@ class POTAClient:
         for name in self.LEADERBOARDS:
             rows = raw.get(name) or []
             boards[name] = [
-                {"callsign": str(row.get("callsign", "")).upper(), "count": row.get("count", 0)}
+                {
+                    "callsign": str(row.get("callsign", "")).upper(),
+                    "count": row.get("count", 0),
+                }
                 for row in rows[:limit]
                 if isinstance(row, dict) and row.get("callsign")
             ]
@@ -439,7 +442,7 @@ class POTAClient:
         """Get activator/hunter stats by callsign."""
         call = callsign.upper()
         key = f"user:{call}"
-        cached = self._cache_get(key)
+        cached: dict[str, Any] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -458,7 +461,7 @@ class POTAClient:
     def scheduled(self) -> list[dict[str, Any]]:
         """Get upcoming scheduled activations."""
         key = "scheduled"
-        cached = self._cache_get(key)
+        cached: list[dict[str, Any]] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
@@ -474,7 +477,7 @@ class POTAClient:
         """Get all parks in a location (state/province)."""
         loc = location.upper()
         key = f"location:{loc}"
-        cached = self._cache_get(key)
+        cached: list[dict[str, Any]] | None = self._cache_get(key)
         if cached is not None:
             return cached
 
