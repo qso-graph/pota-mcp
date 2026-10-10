@@ -71,6 +71,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   came to be right and the other wrong. Both sides of the comparison are normalised too — only the
   filter was before, so a single-region park would also have failed to match had POTA returned the
   field in another case.
+- **`pota_scheduled`'s `within_hours` filter could not read a single real activation.** It read
+  `activityDate`, which POTA does not send, and required `startTime` to be four digits, which
+  `14:00` is not. Against the live endpoint it kept **0 of 186** activations and reported all 186
+  as having an unreadable start time. It now reads `startDate`/`startTime` as POTA sends them and
+  keeps 8, 38 and 48 for windows of 6, 24 and 72 hours, with none unreadable.
+- A POTA schedule entry is a **date range plus a daily UTC window**, not one date: the live feed
+  carries entries running from February to October at the same `startTime` each day. "Starts within
+  the next N hours" is now the next occurrence inside that range. A missing or backwards `endDate`
+  is read as a single day, which is the narrower reading.
+- **Every mock fixture is rebuilt from the live response, field for field** (#32). The schedule
+  fixture had invented `scheduledActivationId`, `activityDate` and `comment`; the park list had
+  `contacts` for `qsos`, `grid4`/`grid6` for one `grid`, a `parktypeDesc` this endpoint does not
+  send, and nothing for `attempts`, `locationDesc`, `notes` or `website`. `attempts` is how
+  `pota_rare_parks_near` tells a park nobody has finished from one nobody has tried, and
+  `locationDesc` is what the region filter reads — both had to bring feeds of their own because
+  the fixture could not stand in for the API.
+- **A live check that makes the next drift a failure.** Run with `--live`, it compares each
+  fixture's field set against the endpoint it stands in for, in both directions: a field POTA no
+  longer sends, and a field POTA has added that no fixture carries. It is what found all of the
+  above.
 
 ## [0.2.6] — 2026-10-09
 
