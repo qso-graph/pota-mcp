@@ -353,7 +353,7 @@ class TestGetVersionInfo:
 # combining, and none of those exists in a single-item fixture.
 
 import pota_mcp.server as srv  # noqa: E402
-from pota_mcp.client import regions  # noqa: E402
+from pota_mcp.client import _MOCK_PARK_ACTIVATIONS, regions, valid_reference  # noqa: E402
 
 
 def _item(**over):
@@ -587,3 +587,91 @@ class TestSpotsBorderParks:
     def test_no_filter_returns_every_spot(self, feed):
         """POTA-L2-069: unfiltered behaviour is unchanged."""
         assert len(POTAClient().spots()) == 3
+
+
+# ---------------------------------------------------------------------------
+# pota_park_activations (#17)
+# ---------------------------------------------------------------------------
+
+
+class TestReferenceValidation:
+    def test_real_reference_shapes_are_accepted(self):
+        """POTA-L2-070: POTA adds entities, and prefixes carry digits.
+
+        A pattern that enumerated prefixes would reject a real park the day a
+        new entity is added, so the prefix is loose and the shape is strict.
+        """
+        for ref in ("US-0062", "us-0062", " JP-0123 ", "CU-0332", "G-0001",
+                    "9A-0001", "3B8-0007", "4U1A-0001", "US-12345"):
+            assert valid_reference(ref) is True, ref
+
+    def test_what_is_not_a_reference_is_rejected(self):
+        """POTA-L2-071: including the shapes that would reach a URL."""
+        for bad in ("", "   ", "US", "0062", "US0062", "US-", "-0062", "US-ABCD",
+                    "../../etc/passwd", "US-0062/../x", "US 0062", "US-0062?count=1"):
+            assert valid_reference(bad) is False, bad
+
+
+class TestParkActivationsTool:
+    def test_returns_recent_activations(self):
+        """POTA-L2-072: reference, count and the rows."""
+        result = srv.pota_park_activations("US-0062")
+        assert result["reference"] == "US-0062"
+        assert result["count"] == len(result["activations"]) == 2
+        first = result["activations"][0]
+        for field in ("activeCallsign", "qso_date", "totalQSOs", "qsosCW", "qsosDATA", "qsosPHONE"):
+            assert field in first, field
+
+    def test_lowercase_reference_is_accepted(self):
+        """POTA-L2-073: the caller's case is not the caller's problem."""
+        assert srv.pota_park_activations("us-0062")["reference"] == "US-0062"
+
+    def test_count_is_bounded(self, monkeypatch):
+        """POTA-L2-074: 1 to 50, observed in the request POTA receives.
+
+        The first version of this asserted only that no error came back, which
+        passed with the clamp deleted — the mock feed returns its two rows
+        whatever is asked for. So the URL is captured instead: the clamp exists
+        to stop a caller asking POTA for everything, and the request is where
+        that is visible.
+        """
+        asked: list[str] = []
+
+        def record(self, url):
+            asked.append(url)
+            return list(_MOCK_PARK_ACTIVATIONS)
+
+        monkeypatch.setattr(POTAClient, "_get_json", record)
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+
+        srv.pota_park_activations("US-0062", count=9999)
+        srv.pota_park_activations("US-0063", count=0)
+        srv.pota_park_activations("US-0064", count=-5)
+        srv.pota_park_activations("US-0065", count=7)
+        assert [u.split("count=")[1] for u in asked] == ["50", "1", "1", "7"]
+
+    def test_count_is_clamped_in_what_comes_back_too(self):
+        """POTA-L2-078: below the floor returns a row, not an empty list.
+
+        A count of 0 or a negative slices the feed to nothing if it reaches it
+        unclamped, which looks like a park nobody has activated.
+        """
+        for count in (0, -5):
+            assert srv.pota_park_activations("US-0062", count=count)["count"] == 1
+
+    def test_null_count_is_the_default(self):
+        """POTA-L2-075: llama.cpp/mcpo sends null for optional params (#1)."""
+        assert srv.pota_park_activations("US-0062", count=None)["count"] == 2
+
+    def test_a_reference_that_is_not_one_is_refused_before_the_request(self):
+        """POTA-L2-076: POTA would answer 404, which says the park does not
+        exist — a different fact from "that is not a reference"."""
+        result = srv.pota_park_activations("../../etc/passwd")
+        assert "error" in result and "not a park reference" in result["error"]
+        assert "activations" not in result
+
+    def test_count_is_part_of_the_cache_key(self, client):
+        """POTA-L2-077: asking for more than was cached must not return the
+        shorter cached answer."""
+        assert len(client.park_activations("US-0062", count=1)) == 1
+        assert len(client.park_activations("US-0062", count=2)) == 2
