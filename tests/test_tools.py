@@ -341,3 +341,186 @@ class TestGetVersionInfo:
         for k in ("service_name", "service_version", "spec_version"):
             assert isinstance(result[k], str), f"{k} should be str, got {type(result[k])}"
             assert result[k], f"{k} should be non-empty"
+
+
+# ---------------------------------------------------------------------------
+# pota_scheduled filters (#20)
+# ---------------------------------------------------------------------------
+#
+# The helpers are tested directly with synthetic activations rather than
+# through the mock feed, which holds one item: the cases worth covering are a
+# park spanning two regions, a start time POTA did not give, and filters
+# combining, and none of those exists in a single-item fixture.
+
+import pota_mcp.server as srv  # noqa: E402
+
+
+def _item(**over):
+    base = {
+        "activator": "N3VEM", "reference": "US-0058", "locationDesc": "US-VA",
+        "activityDate": "2026-03-05", "startTime": "1400",
+    }
+    base.update(over)
+    return base
+
+
+class TestScheduledFilterHelpers:
+    def test_regions_splits_a_park_that_spans_two(self):
+        """POTA-L2-046: locationDesc is comma-separated for a park on a border."""
+        assert srv._regions(_item(locationDesc="US-VA,US-MD")) == ["US-VA", "US-MD"]
+        assert srv._regions(_item(locationDesc="us-va")) == ["US-VA"]
+        assert srv._regions(_item(locationDesc="")) == []
+        assert srv._regions({}) == []
+
+    def test_location_matches_either_region_of_a_border_park(self):
+        """POTA-L2-047: US-MD finds a park listed US-VA,US-MD.
+
+        pota_spots compares locationDesc for equality and so misses these;
+        that is reported separately rather than copied here.
+        """
+        both = _item(locationDesc="US-VA,US-MD")
+        assert srv._matches(both, "US-MD", "", "") is True
+        assert srv._matches(both, "us-md", "", "") is True
+        assert srv._matches(both, "US-ID", "", "") is False
+
+    def test_reference_and_activator_are_exact_and_case_insensitive(self):
+        """POTA-L2-048: a reference is a whole reference, not a prefix."""
+        i = _item()
+        assert srv._matches(i, "", "us-0058", "") is True
+        assert srv._matches(i, "", "US-005", "") is False   # not a prefix match
+        assert srv._matches(i, "", "", "n3vem") is True
+        assert srv._matches(i, "", "", "N3VE") is False
+
+    def test_filters_combine_with_and(self):
+        """POTA-L2-049: every filter given has to pass."""
+        i = _item()
+        assert srv._matches(i, "US-VA", "US-0058", "N3VEM") is True
+        assert srv._matches(i, "US-VA", "US-0058", "K4SWL") is False
+        assert srv._matches(i, "US-ID", "US-0058", "N3VEM") is False
+        # No filters passes everything, which is what an unfiltered call does.
+        assert srv._matches(i, "", "", "") is True
+
+    def test_start_time_is_read_as_utc(self):
+        """POTA-L2-050: activityDate plus startTime, both UTC."""
+        at = srv._starts_at(_item(activityDate="2026-03-05", startTime="1400"))
+        assert at is not None
+        assert (at.year, at.month, at.day, at.hour, at.minute) == (2026, 3, 5, 14, 0)
+        assert at.tzinfo is not None
+        # Three digits is a valid HMM.
+        early = srv._starts_at(_item(startTime="730"))
+        assert early is not None and (early.hour, early.minute) == (7, 30)
+
+    def test_an_unreadable_start_time_is_none_rather_than_a_guess(self):
+        """POTA-L2-051: what POTA did not say is not invented."""
+        for bad in ("", "  ", "99", "abcd", "2460", "1399", "12345"):
+            assert srv._starts_at(_item(startTime=bad)) is None, bad
+        assert srv._starts_at(_item(activityDate="")) is None
+        assert srv._starts_at(_item(activityDate="not-a-date")) is None
+        assert srv._starts_at({}) is None
+
+
+class TestScheduledToolFilters:
+    def test_no_filters_returns_exactly_what_it_always_did(self):
+        """POTA-L2-052: an unfiltered call is unchanged — no extra keys."""
+        result = srv.pota_scheduled()
+        assert sorted(result) == ["activations", "total"]
+        assert result["total"] == 1
+
+    def test_nulls_are_treated_as_no_filter(self):
+        """POTA-L2-053: llama.cpp/mcpo sends null for optional params (#1)."""
+        result = srv.pota_scheduled(location=None, reference=None, activator=None)
+        assert sorted(result) == ["activations", "total"]
+        assert result["total"] == 1
+
+    def test_a_filter_that_matches_says_what_was_asked(self):
+        """POTA-L2-054: the result carries the filters and the total before them."""
+        result = srv.pota_scheduled(activator="n3vem")
+        assert result["total"] == 1
+        assert result["filters"] == {"activator": "N3VEM"}
+        assert result["available"] == 1
+
+    def test_a_filter_that_matches_nothing_returns_an_empty_list(self):
+        """POTA-L2-055: empty is an answer, and still says what was asked."""
+        result = srv.pota_scheduled(location="US-ID")
+        assert result["total"] == 0 and result["activations"] == []
+        assert result["filters"] == {"location": "US-ID"}
+        assert result["available"] == 1
+
+    def test_a_time_window_excludes_a_date_in_the_past(self):
+        """POTA-L2-056: the fixture is scheduled for 2026-03-05, already past."""
+        result = srv.pota_scheduled(within_hours=24)
+        assert result["total"] == 0
+        assert result["filters"]["within_hours"] == 24
+        assert "start_time_unreadable" not in result
+
+    def test_an_absurd_window_does_not_raise(self):
+        """POTA-L2-057: inf raises inside timedelta and nan fails every
+        comparison, which would empty the list for no stated reason."""
+        for value in (float("inf"), float("nan"), -5):
+            result = srv.pota_scheduled(within_hours=value)
+            assert "error" not in result, value
+
+
+class TestScheduledWindowAgainstAFutureSchedule:
+    """The fixture feed is dated 2026-03-05 and so is always in the past.
+
+    Every window test above therefore proves exclusion. These supply a feed of
+    their own so inclusion — the path an operator actually uses — is proven
+    too, and so the unreadable count can be exercised at all.
+    """
+
+    @pytest.fixture
+    def feed(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        def at(hours):
+            when = datetime.now(timezone.utc) + timedelta(hours=hours)
+            return when.strftime("%Y-%m-%d"), when.strftime("%H%M")
+
+        soon_date, soon_time = at(2)
+        later_date, later_time = at(30)
+        items = [
+            _item(activator="SOON", reference="US-0001", activityDate=soon_date, startTime=soon_time),
+            _item(activator="LATER", reference="US-0002", activityDate=later_date, startTime=later_time),
+            _item(activator="NOTIME", reference="US-0003", startTime=""),
+        ]
+
+        class Feed:
+            def scheduled(self):
+                return list(items)
+
+        monkeypatch.setattr(srv, "_get_client", lambda: Feed())
+        return items
+
+    def test_a_window_keeps_what_starts_inside_it(self, feed):
+        """POTA-L2-058: four hours ahead finds the one two hours away."""
+        result = srv.pota_scheduled(within_hours=4)
+        assert [a["activator"] for a in result["activations"]] == ["SOON"]
+        assert result["available"] == 3
+
+    def test_a_wider_window_reaches_further(self, feed):
+        """POTA-L2-059: 48 hours finds both dated activations."""
+        result = srv.pota_scheduled(within_hours=48)
+        assert [a["activator"] for a in result["activations"]] == ["SOON", "LATER"]
+
+    def test_an_unreadable_start_is_counted_and_not_silently_dropped(self, feed):
+        """POTA-L2-060: an activation missing from a filtered list looks the
+        same as one that was never scheduled, so the count is reported."""
+        result = srv.pota_scheduled(within_hours=4)
+        assert result["start_time_unreadable"] == 1
+        assert "Omit within_hours" in result["start_time_unreadable_note"]
+
+    def test_without_a_window_nothing_is_dropped_for_a_missing_start(self, feed):
+        """POTA-L2-061: the start time only matters when a window is asked for."""
+        result = srv.pota_scheduled()
+        assert result["total"] == 3
+        assert "start_time_unreadable" not in result
+
+    def test_a_window_combines_with_a_text_filter(self, feed):
+        """POTA-L2-062: AND, and the unreadable count is about what was asked."""
+        result = srv.pota_scheduled(activator="SOON", within_hours=4)
+        assert result["total"] == 1
+        assert result["filters"] == {"activator": "SOON", "within_hours": 4}
+        # NOTIME was filtered out by activator before the window was applied,
+        # so it is not reported as unreadable here.
+        assert "start_time_unreadable" not in result
