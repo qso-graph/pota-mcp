@@ -7,7 +7,7 @@ license = {text = "GPL-3.0-or-later"}
 authors = [{name = "Greg Beam, KI7MT", email = "maintainers@qso-graph.io"}]
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=3.0",
+    "fastmcp>=4.0,<5",
 ]
 keywords = [
     "amateur-radio", "ham-radio", "pota", "parks-on-the-air", "activator",
