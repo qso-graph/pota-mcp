@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was this park last activated?" and "is it often on the air?". `count` is 1 to 50, default 10, and
   is part of the cache key so asking for more than was cached fetches rather than returning a
   shorter answer.
+- **`pota_park_leaderboard`**, a new tool (#18): the three boards POTA publishes for a park — most
+  activations, most QSOs as an activator, most QSOs as a hunter. Each row is a callsign and a count
+  and nothing else, and the boards are named here rather than read off the response, so neither a
+  field nor a board POTA adds later is passed on because nobody noticed. POTA's user endpoint
+  already had to have `qth`, which can hold a street address, and `gravatar`, a hash of an email
+  address, stripped out of it (#15). Rows per board are 1 to 25, default 10.
 - **Park references are validated** before a request is made. A reference is an entity prefix, a
   hyphen and a number — loose about the prefix because POTA adds entities and a list of prefixes
   would reject a real park the day a new one appears, strict about the shape. Without it POTA
