@@ -353,6 +353,7 @@ class TestGetVersionInfo:
 # combining, and none of those exists in a single-item fixture.
 
 import pota_mcp.server as srv  # noqa: E402
+from pota_mcp.client import regions  # noqa: E402
 
 
 def _item(**over):
@@ -367,10 +368,23 @@ def _item(**over):
 class TestScheduledFilterHelpers:
     def test_regions_splits_a_park_that_spans_two(self):
         """POTA-L2-046: locationDesc is comma-separated for a park on a border."""
-        assert srv._regions(_item(locationDesc="US-VA,US-MD")) == ["US-VA", "US-MD"]
-        assert srv._regions(_item(locationDesc="us-va")) == ["US-VA"]
-        assert srv._regions(_item(locationDesc="")) == []
-        assert srv._regions({}) == []
+        assert regions(_item(locationDesc="US-VA,US-MD")) == ["US-VA", "US-MD"]
+        assert regions(_item(locationDesc="us-va")) == ["US-VA"]
+        assert regions(_item(locationDesc="")) == []
+        assert regions({}) == []
+
+    def test_regions_handles_the_worst_real_case(self):
+        """POTA-L2-063: the North Country Trail, US-4239, spans eight states.
+
+        Taken from the live spot feed on 2026-10-10, where five of 111 spots
+        carried more than one code (#27).
+        """
+        trail = _item(locationDesc="US-MI,US-MN,US-ND,US-NY,US-OH,US-PA,US-VT,US-WI")
+        assert len(regions(trail)) == 8
+        for state in ("US-MI", "US-OH", "US-WI"):
+            assert state in regions(trail)
+        # Whitespace around a code is POTA's to vary, not ours to depend on.
+        assert regions(_item(locationDesc=" US-VA , US-MD ")) == ["US-VA", "US-MD"]
 
     def test_location_matches_either_region_of_a_border_park(self):
         """POTA-L2-047: US-MD finds a park listed US-VA,US-MD.
@@ -524,3 +538,52 @@ class TestScheduledWindowAgainstAFutureSchedule:
         # NOTIME was filtered out by activator before the window was applied,
         # so it is not reported as unreadable here.
         assert "start_time_unreadable" not in result
+
+
+class TestSpotsBorderParks:
+    """#27: filtering spots by location must find a park that spans regions.
+
+    `_MOCK_SPOTS` holds no border park and existing tests assert spot counts,
+    so a feed is injected here rather than the fixture perturbed.
+    """
+
+    @pytest.fixture
+    def feed(self, monkeypatch):
+        spots = [
+            {"activator": "K4SWL", "reference": "US-0062", "locationDesc": "US-NC",
+             "frequency": "14062", "mode": "CW"},
+            # The live worst case, 2026-10-10: eight states on one trail.
+            {"activator": "W8AAA", "reference": "US-4239", "mode": "SSB", "frequency": "14250",
+             "locationDesc": "US-MI,US-MN,US-ND,US-NY,US-OH,US-PA,US-VT,US-WI"},
+            {"activator": "JA1BBB", "reference": "JP-0123", "locationDesc": "JP-NN,JP-YN",
+             "frequency": "7030", "mode": "CW"},
+        ]
+        monkeypatch.setattr(POTAClient, "_get_json", lambda self, url: list(spots))
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        return spots
+
+    def test_a_middle_region_of_an_eight_state_park_is_found(self, feed):
+        """POTA-L2-064: US-OH is seventh of eight codes, not the whole field."""
+        found = POTAClient().spots(location="US-OH")
+        assert [s["reference"] for s in found] == ["US-4239"]
+
+    def test_the_first_and_last_region_are_found_too(self, feed):
+        """POTA-L2-065: not an off-by-one at either end of the split."""
+        assert [s["reference"] for s in POTAClient().spots(location="US-MI")] == ["US-4239"]
+        assert [s["reference"] for s in POTAClient().spots(location="US-WI")] == ["US-4239"]
+
+    def test_a_single_region_park_still_matches(self, feed):
+        """POTA-L2-066: the ordinary case is unchanged."""
+        assert [s["reference"] for s in POTAClient().spots(location="US-NC")] == ["US-0062"]
+
+    def test_a_lowercase_filter_matches(self, feed):
+        """POTA-L2-067: the filter side was already normalised; now both are."""
+        assert [s["reference"] for s in POTAClient().spots(location="us-oh")] == ["US-4239"]
+
+    def test_a_region_nobody_is_in_returns_nothing(self, feed):
+        """POTA-L2-068: not vacuous — the filter still excludes."""
+        assert POTAClient().spots(location="US-ID") == []
+
+    def test_no_filter_returns_every_spot(self, feed):
+        """POTA-L2-069: unfiltered behaviour is unchanged."""
+        assert len(POTAClient().spots()) == 3

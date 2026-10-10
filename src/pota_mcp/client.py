@@ -126,6 +126,26 @@ _USER_STATS_FIELDS = (
     "endorsements",
 )
 
+def regions(item: dict[str, Any]) -> list[str]:
+    """The location codes a park is in, normalised.
+
+    POTA's `locationDesc` is comma-separated for a park that spans regions. The
+    North Country Trail is `US-MI,US-MN,US-ND,US-NY,US-OH,US-PA,US-VT,US-WI`;
+    on the live spot feed about one spot in twenty carries more than one code.
+    So a park belongs to a region when the code is *among* its codes, never
+    when it equals the whole field (#27).
+
+    Both sides are upper-cased here. The comparison this replaced normalised
+    only the filter, so a single-region park would also have failed to match if
+    POTA ever returned the field in another case.
+    """
+    return [
+        part.strip().upper()
+        for part in str(item.get("locationDesc", "")).split(",")
+        if part.strip()
+    ]
+
+
 _MOCK_SCHEDULED = [
     {
         "scheduledActivationId": 12345,
@@ -245,7 +265,7 @@ class POTAClient:
                 continue
             if mode and spot.get("mode", "").upper() != mode.upper():
                 continue
-            if location and spot.get("locationDesc", "") != location.upper():
+            if location and location.upper() not in regions(spot):
                 continue
             if program and not spot.get("reference", "").startswith(program.upper()):
                 continue
