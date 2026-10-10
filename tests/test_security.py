@@ -83,9 +83,11 @@ def test_no_eval_exec():
 
 
 def test_user_stats_drops_personal_fields():
-    """No republishing of personal data: user_stats returns an allowlist without qth or gravatar (#15).
+    """No republishing of personal data: user_stats returns an allowlist
+    without qth or gravatar (#15).
 
-    Static, like the rest of this file: the release gate runs it without installing the package.
+    Static, like the rest of this file: the release gate runs it without
+    installing the package.
     """
     import ast
 
@@ -105,4 +107,6 @@ def test_user_stats_drops_personal_fields():
     user_stats = next(
         n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "user_stats"
     )
-    assert "_USER_STATS_FIELDS" in ast.unparse(user_stats), "user_stats does not apply the allowlist"
+    assert "_USER_STATS_FIELDS" in ast.unparse(user_stats), (
+        "user_stats does not apply the allowlist"
+    )

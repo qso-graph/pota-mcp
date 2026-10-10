@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **ruff and mypy run in CI** (qso-graph-devel#66), as a job the `ci-all-green` gate requires.
+  Settings are copied from `adif-mcp`, the reference for every qso-graph Python repo, rather than
+  invented here. They run once rather than per Python version: both read the source, and neither
+  answer changes with the interpreter.
+  - ruff found 24 things, all in this repo's own style — 19 lines over 95 characters, 4 unsorted
+    import blocks, one unused import. Fixed rather than configured away.
+  - mypy in strict mode found 12, and they were worth having. The mock constants were inferred as
+    `dict[str, object]` from their literals, so every `.get()` on a mock was unusable; they are
+    annotated as the JSON stand-ins they are. Eight returns handed back `Any` from the shared
+    cache, so each cache read is now annotated with its own method's return type — stating, where
+    it is known, what one dict holding every kind of answer gives back. And `mcp.run` was passed a
+    `str` where fastmcp takes a literal; the literal is written out.
+  - `uv.lock` changes here, unlike the other work in this release: ruff and mypy are new dev
+    dependencies and CI installs with `--frozen`.
+
 - **`pota_rare_parks_near`**, a new tool (#19): parks near a point, least activated first and
   nearest among equals, each flagged `never_activated`. Answers "which parks near me have never, or
   rarely, been activated?". POTA's `attempts` comes through untouched, because a park that has been

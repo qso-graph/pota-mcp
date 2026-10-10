@@ -49,7 +49,9 @@ def test_park_info_live(client):
     """POTA-L3-002: park_info('US-0001') returns Acadia with correct fields."""
     result = client.park_info(KNOWN_PARK)
     assert "error" not in result, f"park_info returned error: {result}"
-    assert "Acadia" in result.get("name", ""), f"Expected 'Acadia' in name, got: {result.get('name')}"
+    assert "Acadia" in result.get("name", ""), (
+        f"Expected 'Acadia' in name, got: {result.get('name')}"
+    )
     assert "latitude" in result, "Missing latitude"
     assert "longitude" in result, "Missing longitude"
     assert "grid4" in result, "Missing grid4"
@@ -100,7 +102,9 @@ def test_user_stats_live(client):
     result = client.user_stats(KNOWN_USER)
     assert "error" not in result, f"user_stats returned error: {result}"
     assert "qth" not in result and "gravatar" not in result
-    assert result.get("callsign") == KNOWN_USER, f"Expected callsign {KNOWN_USER}, got: {result.get('callsign')}"
+    assert result.get("callsign") == KNOWN_USER, (
+        f"Expected callsign {KNOWN_USER}, got: {result.get('callsign')}"
+    )
     assert isinstance(result.get("activator"), dict), "activator should be a dict"
     assert isinstance(result.get("hunter"), dict), "hunter should be a dict"
 
@@ -135,7 +139,9 @@ def test_location_parks_live(client):
     assert isinstance(result, list), "location_parks() must return a list"
     assert len(result) > 0, "Maine should have parks"
     references = [p.get("reference") for p in result]
-    assert KNOWN_PARK in references, f"US-0001 not found in Maine parks (got {len(result)} parks)"
+    assert KNOWN_PARK in references, (
+        f"US-0001 not found in Maine parks (got {len(result)} parks)"
+    )
 
 
 # POTA-L3-011: location_parks entries have park fields
@@ -171,10 +177,15 @@ def test_nearby_parks_includes_acadia_live(client):
     """POTA-L3-013: nearby_parks near Acadia coords should include US-0001."""
     result = client.nearby_parks(KNOWN_LOCATION, ACADIA_LAT, ACADIA_LON, radius_km=50.0)
     references = [p.get("reference") for p in result]
-    assert KNOWN_PARK in references, "Acadia (US-0001) should appear in nearby parks near its own coordinates"
+    assert KNOWN_PARK in references, (
+        "Acadia (US-0001) should appear in nearby parks near its own coordinates"
+    )
     # Acadia should be very close to itself
     acadia = next(p for p in result if p.get("reference") == KNOWN_PARK)
-    assert acadia["distance_km"] < 10.0, f"Acadia distance from its own coords should be < 10 km, got {acadia['distance_km']}"
+    assert acadia["distance_km"] < 10.0, (
+        "Acadia distance from its own coords should be < 10 km, "
+        f"got {acadia['distance_km']}"
+    )
 
 
 # POTA-L3-014: spots with band filter
@@ -185,7 +196,8 @@ def test_spots_band_filter_live(client):
     assert isinstance(result, list), "spots(band='20m') must return a list"
     # If there are results, all should be on 20m (14.0-14.35 MHz)
     for spot in result:
-        freq = float(spot["frequency"]) / 1000.0 if float(spot["frequency"]) > 1000 else float(spot["frequency"])
+        khz = float(spot["frequency"])
+        freq = khz / 1000.0 if khz > 1000 else khz
         assert 14.0 <= freq <= 14.35, f"Spot frequency {freq} MHz is not on 20m"
 
 

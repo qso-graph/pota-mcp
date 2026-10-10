@@ -37,7 +37,7 @@ pota-mcp = "pota_mcp.server:main"
 
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6.8", "mypy>=1.11"]
 
 [build-system]
 requires = ["hatchling"]
@@ -45,3 +45,26 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pota_mcp"]
+
+# Lint and type settings follow adif-mcp, which is the reference for every
+# qso-graph Python repo (qso-graph-devel#66). Copied rather than invented so
+# the eighteen repos do not each grow a style.
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+line-length = 95
+extend-exclude = [".venv", "dist", "build", ".eggs", ".pytest_cache", "site"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+fixable = ["I"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+ignore_missing_imports = true

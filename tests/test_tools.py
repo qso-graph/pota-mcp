@@ -8,15 +8,14 @@ Test IDs: POTA-L2-001 through POTA-L2-045
 
 from __future__ import annotations
 
-import math
 import os
+
 import pytest
 
 # Enable mock mode before importing anything
 os.environ["POTA_MCP_MOCK"] = "1"
 
 from pota_mcp.client import POTAClient
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -176,7 +175,8 @@ class TestParkInfoTool:
     def test_park_fields(self, client):
         """POTA-L2-030: Park info has expected fields."""
         result = client.park_info("US-0001")
-        for field in ("name", "latitude", "longitude", "grid4", "parktypeDesc", "locationDesc"):
+        fields = ("name", "latitude", "longitude", "grid4", "parktypeDesc", "locationDesc")
+        for field in fields:
             assert field in result, f"Missing field: {field}"
 
 
@@ -494,8 +494,10 @@ class TestScheduledWindowAgainstAFutureSchedule:
         soon_date, soon_time = at(2)
         later_date, later_time = at(30)
         items = [
-            _item(activator="SOON", reference="US-0001", activityDate=soon_date, startTime=soon_time),
-            _item(activator="LATER", reference="US-0002", activityDate=later_date, startTime=later_time),
+            _item(activator="SOON", reference="US-0001",
+                  activityDate=soon_date, startTime=soon_time),
+            _item(activator="LATER", reference="US-0002",
+                  activityDate=later_date, startTime=later_time),
             _item(activator="NOTIME", reference="US-0003", startTime=""),
         ]
 
@@ -626,7 +628,8 @@ class TestParkActivationsTool:
         assert result["reference"] == "US-0062"
         assert result["count"] == len(result["activations"]) == 2
         first = result["activations"][0]
-        for field in ("activeCallsign", "qso_date", "totalQSOs", "qsosCW", "qsosDATA", "qsosPHONE"):
+        fields = ("activeCallsign", "qso_date", "totalQSOs", "qsosCW", "qsosDATA", "qsosPHONE")
+        for field in fields:
             assert field in first, field
 
     def test_lowercase_reference_is_accepted(self):
@@ -730,7 +733,8 @@ class TestParkLeaderboardTool:
             POTAClient, "_get_json",
             lambda self, url: {
                 "activations": [
-                    {"callsign": "K1ABC", "count": 4, "qth": "12 Mill Lane", "gravatar": "deadbeef"}
+                    {"callsign": "K1ABC", "count": 4,
+                     "qth": "12 Mill Lane", "gravatar": "deadbeef"}
                 ],
                 "activator_qsos": [],
                 "hunter_qsos": [],
@@ -886,7 +890,8 @@ class TestRareParksNear:
         """POTA-L2-092: the #1 convention, and bounds that hold."""
         null = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=None, limit=None)
         assert null["radius_km"] == 50.0
-        absurd = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=99999, limit=9999)
+        absurd = srv.pota_rare_parks_near(
+            "US-ID", 43.617, -115.993, radius_km=99999, limit=9999)
         assert absurd["radius_km"] == 500.0
         assert len(absurd["parks"]) <= 100
 
