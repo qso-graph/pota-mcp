@@ -5,6 +5,21 @@ All notable changes to `pota-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- **`pota_scheduled` takes optional filters** (#20): `location`, `reference`, `activator` and
+  `within_hours`. They combine with AND, and an unfiltered call returns exactly what it always
+  did — the same two keys, no extra ones. When a filter is given the result also reports what was
+  asked for and how many activations were available before filtering, so an empty answer can be
+  told apart from an empty schedule.
+  - `location` matches a park that spans regions: `US-MD` finds one POTA lists as `US-VA,US-MD`,
+    because `locationDesc` is comma-separated for a park on a border.
+  - `within_hours` means the start time falls between now and then. An activation already under
+    way is not included; `pota_spots` is what reports the air now.
+  - An activation POTA gave no readable start date and time for is **counted and reported**, not
+    dropped: missing from a filtered list, it would look like one that was never scheduled.
+  - Filtering is applied to the cached feed, so one fetch serves every combination of filters.
+
 ## [0.2.6] — 2026-10-09
 
 - `pota_user_stats` returns only callsign, name, activator, attempts, hunter, awards and endorsements. POTA's `qth` (which can hold an address) and `gravatar` (a hash of the user's email address) are no longer passed through (#15).

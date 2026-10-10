@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastmcp import FastMCP
@@ -150,17 +151,158 @@ def pota_user_stats(callsign: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Scheduled-activation filters (#20)
+# ---------------------------------------------------------------------------
+#
+# Applied here rather than in the client, deliberately. `client.scheduled()`
+# caches the whole feed under one key, so one cached fetch serves every
+# combination of filters. `spots` takes the other route and keys its cache by
+# its filters, which means a different band is a different cache entry and a
+# fresh fetch.
+
+
+def _regions(item: dict[str, Any]) -> list[str]:
+    """The location codes an activation is in.
+
+    POTA's `locationDesc` is comma-separated for a park that spans regions —
+    one on a state line is `US-VA,US-MD` — so a park is matched when the code
+    is *among* its regions rather than equal to the whole field. `pota_spots`
+    compares the field for equality and so misses those parks; reported
+    separately rather than copied.
+    """
+    return [part.strip().upper() for part in str(item.get("locationDesc", "")).split(",") if part.strip()]
+
+
+def _starts_at(item: dict[str, Any]) -> datetime | None:
+    """When the activation starts, in UTC, or None if POTA did not say.
+
+    `activityDate` is `YYYY-MM-DD` and `startTime` is `HHMM`, both UTC. An
+    entry whose start cannot be read is not silently dropped: the count of
+    those is reported, because an activation missing from a filtered list looks
+    the same as one that was never scheduled.
+    """
+    date, time = str(item.get("activityDate", "")), str(item.get("startTime", "")).strip()
+    if not date or len(time) not in (3, 4) or not time.isdigit():
+        return None
+    try:
+        hour, minute = int(time[:-2]), int(time[-2:])
+        if hour > 23 or minute > 59:
+            return None
+        day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return day + timedelta(hours=hour, minutes=minute)
+
+
+def _matches(
+    item: dict[str, Any],
+    location: str,
+    reference: str,
+    activator: str,
+) -> bool:
+    """Whether one activation passes every text filter given (AND)."""
+    if location and location.upper() not in _regions(item):
+        return False
+    if reference and str(item.get("reference", "")).upper() != reference.upper():
+        return False
+    if activator and str(item.get("activator", "")).upper() != activator.upper():
+        return False
+    return True
+
+
 @mcp.tool()
-def pota_scheduled() -> dict[str, Any]:
+def pota_scheduled(
+    location: str | None = "",
+    reference: str | None = "",
+    activator: str | None = "",
+    within_hours: float | None = None,
+) -> dict[str, Any]:
     """Get upcoming scheduled POTA activations.
 
+    All filters are optional and combine with AND — omit them all and the
+    whole schedule comes back, as before.
+
+    Args:
+        location: Filter by location code (e.g., US-ID, CA-ON). Matches a park
+            that spans regions, so US-MD finds a park listed as US-VA,US-MD.
+            Empty for all.
+        reference: Filter by park reference (e.g., US-0058). Empty for all.
+        activator: Filter by activator callsign (e.g., N3VEM). Empty for all.
+        within_hours: Only activations whose start time falls between now and
+            this many hours from now. An activation already under way is not
+            included — pota_spots is what reports the air now. Omit for no
+            time limit.
+
     Returns:
-        List of scheduled activations with activator, park, date,
-        time window, planned frequencies, and comments.
+        List of scheduled activations with activator, park, date, time window,
+        planned frequencies, and comments. When a filter is given, the result
+        also says what was asked for and how many activations were available
+        before filtering.
     """
     try:
+        # Coerce None → "" (llama.cpp/mcpo sends null for optional params, #1)
+        location = location or ""
+        reference = reference or ""
+        activator = activator or ""
         items = _get_client().scheduled()
-        return {"total": len(items), "activations": items}
+        available = len(items)
+
+        matched = [i for i in items if _matches(i, location, reference, activator)]
+
+        # The time window is applied after the text filters so the unreadable
+        # count below is about the activations the operator actually asked for.
+        unreadable = 0
+        if within_hours is not None:
+            # "Starts within the next N hours", exactly that: between now and
+            # then. An activation already under way is not starting, and
+            # pota_spots is the tool for what is on the air now. A grace period
+            # either side would be this tool inventing a meaning the caller did
+            # not ask for.
+            #
+            # Clamped because a float can be inf or nan: timedelta(hours=inf)
+            # raises, and every comparison against nan is false, which would
+            # empty the list for no stated reason.
+            hours = float(within_hours)
+            hours = 0.0 if hours != hours else min(max(hours, 0.0), 24.0 * 366)
+            now = datetime.now(timezone.utc)
+            until = now + timedelta(hours=hours)
+            kept = []
+            for item in matched:
+                start = _starts_at(item)
+                if start is None:
+                    unreadable += 1
+                    continue
+                if now <= start <= until:
+                    kept.append(item)
+            matched = kept
+
+        result: dict[str, Any] = {"total": len(matched), "activations": matched}
+        asked = {
+            k: v
+            for k, v in (
+                ("location", location.upper()),
+                ("reference", reference.upper()),
+                ("activator", activator.upper()),
+                ("within_hours", within_hours),
+            )
+            if v not in ("", None)
+        }
+        if asked:
+            # Only when something was asked for, so an unfiltered call returns
+            # exactly the shape it always did.
+            result["filters"] = asked
+            result["available"] = available
+            if unreadable:
+                # Never silently dropped: an activation missing from the list
+                # looks the same as one that was never scheduled.
+                result["start_time_unreadable"] = unreadable
+                result["start_time_unreadable_note"] = (
+                    f"{unreadable} activation(s) matched the other filters but POTA did not give a "
+                    "readable start date and time, so the time window could not be applied to them. "
+                    "Omit within_hours to see them."
+                )
+        return result
     except Exception as e:
         return {"error": str(e)}
 
