@@ -91,6 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture's field set against the endpoint it stands in for, in both directions: a field POTA no
   longer sends, and a field POTA has added that no fixture carries. It is what found all of the
   above.
+- The README lists all eleven tools (qso-graph-devel#69). `pota_park_activations`,
+  `pota_park_leaderboard` and `pota_rare_parks_near` were shipped and undocumented, and
+  `pota_scheduled`'s filters were not mentioned.
+- **The published contact is `maintainers@qso-graph.io`** (qso-graph-devel#69). The `authors` field
+  carried a personal address, and that field is what PyPI shows on the package page.
 
 ## [0.2.6] — 2026-10-09
 
