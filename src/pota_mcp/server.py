@@ -421,6 +421,59 @@ def pota_nearby_parks(
         return {"error": str(e)}
 
 
+@mcp.tool()
+def pota_rare_parks_near(
+    location: str,
+    latitude: float,
+    longitude: float,
+    radius_km: float | None = 50.0,
+    limit: int | None = 25,
+) -> dict[str, Any]:
+    """Find the least-activated POTA parks near a point.
+
+    Answers "which parks near me have never, or rarely, been activated?" —
+    for an activator looking for something unworked, or a hunter looking for a
+    rare one. Least activated first, nearest first among equals.
+
+    Args:
+        location: Location code (e.g., US-ID, CA-ON). Required to scope the search.
+        latitude: Center point latitude (e.g., 43.617).
+        longitude: Center point longitude (e.g., -115.993).
+        radius_km: Search radius in km (default 50, max 500).
+        limit: Maximum parks to return (default 25, max 100).
+
+    Returns:
+        Parks sorted by fewest activations then distance, each with
+        distance_km, never_activated, and POTA's own activations, attempts and
+        qsos counts. A park with attempts but no activations has been tried
+        and not finished.
+    """
+    try:
+        # Coerce None → defaults (llama.cpp/mcpo sends null for optional params, #1)
+        radius_km = radius_km if radius_km is not None else 50.0
+        limit = limit if limit is not None else 25
+        radius_km = min(max(float(radius_km), 1.0), 500.0)
+        limit = min(max(int(limit), 1), 100)
+        parks = _get_client().rare_parks_near(
+            location=location,
+            latitude=latitude,
+            longitude=longitude,
+            radius_km=radius_km,
+            limit=limit,
+        )
+        never = sum(1 for p in parks if p.get("never_activated"))
+        return {
+            "location": location.upper(),
+            "center": {"latitude": latitude, "longitude": longitude},
+            "radius_km": radius_km,
+            "total": len(parks),
+            "never_activated": never,
+            "parks": parks,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

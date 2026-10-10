@@ -502,17 +502,25 @@ class POTAClient:
         )
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-    def nearby_parks(
+    def _parks_within(
         self,
         location: str,
         latitude: float,
         longitude: float,
-        radius_km: float = 50.0,
-        limit: int = 25,
+        radius_km: float,
     ) -> list[dict[str, Any]]:
-        """Find POTA parks near a point within a location."""
+        """Every park in the location within the radius, each with distance_km.
+
+        Uncapped on purpose. Both callers below cap, but by different things —
+        distance for the nearest, activations for the rarest — and a list
+        already cut to the twenty-five nearest cannot answer "which park near
+        me has never been activated" if that park is fortieth nearest.
+
+        One call to POTA either way: /location/parks/{loc} carries each park's
+        activations, attempts and qsos, so no per-park request is needed.
+        """
         parks = self.location_parks(location)
-        nearby = []
+        within = []
         for park in parks:
             plat = park.get("latitude")
             plon = park.get("longitude")
@@ -525,6 +533,43 @@ class POTAClient:
             if dist <= radius_km:
                 entry = dict(park)
                 entry["distance_km"] = round(dist, 1)
-                nearby.append(entry)
+                within.append(entry)
+        return within
+
+    def nearby_parks(
+        self,
+        location: str,
+        latitude: float,
+        longitude: float,
+        radius_km: float = 50.0,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """Find POTA parks near a point within a location."""
+        nearby = self._parks_within(location, latitude, longitude, radius_km)
         nearby.sort(key=lambda p: p["distance_km"])
         return nearby[:limit]
+
+    def rare_parks_near(
+        self,
+        location: str,
+        latitude: float,
+        longitude: float,
+        radius_km: float = 50.0,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """Parks near a point, least activated first, then nearest.
+
+        Each entry gains `never_activated`. A park with attempts but no
+        activations is a different thing again — somebody has been and not made
+        the ten contacts — and `attempts` is already in POTA's park data, so it
+        comes through untouched for a caller who cares.
+        """
+        candidates = self._parks_within(location, latitude, longitude, radius_km)
+        for park in candidates:
+            try:
+                activations = int(park.get("activations") or 0)
+            except (TypeError, ValueError):
+                activations = 0
+            park["never_activated"] = activations == 0
+        candidates.sort(key=lambda p: (int(p.get("activations") or 0), p["distance_km"]))
+        return candidates[:limit]
