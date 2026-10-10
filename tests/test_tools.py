@@ -9,6 +9,7 @@ Test IDs: POTA-L2-001 through POTA-L2-045
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -224,8 +225,13 @@ class TestScheduledTool:
         """POTA-L2-035: Scheduled activations have expected fields."""
         result = client.scheduled()
         item = result[0]
-        for field in ("activator", "reference", "activityDate", "startTime"):
+        # POTA's own names, checked against the live endpoint (#32).
+        for field in ("activator", "reference", "startDate", "endDate",
+                      "startTime", "endTime", "scheduledActivitiesId", "comments"):
             assert field in item, f"Missing field: {field}"
+        # And none of the three this fixture used to invent.
+        for absent in ("activityDate", "comment", "scheduledActivationId"):
+            assert absent not in item, f"POTA does not send {absent}"
 
 
 class TestLocationParksTool:
@@ -357,9 +363,16 @@ from pota_mcp.client import _MOCK_PARK_ACTIVATIONS, regions, valid_reference  # 
 
 
 def _item(**over):
+    """One schedule entry, shaped as POTA sends it (#32).
+
+    A date range plus a daily UTC window, `HH:MM` and not `HHMM`. What was
+    here before was `activityDate` and `1400`, neither of which POTA sends —
+    which is how the `within_hours` filter shipped unable to read a start time.
+    """
     base = {
         "activator": "N3VEM", "reference": "US-0058", "locationDesc": "US-VA",
-        "activityDate": "2026-03-05", "startTime": "1400",
+        "startDate": "2026-03-05", "endDate": "2026-03-05",
+        "startTime": "14:00", "endTime": "18:00",
     }
     base.update(over)
     return base
@@ -415,21 +428,57 @@ class TestScheduledFilterHelpers:
         assert srv._matches(i, "", "", "") is True
 
     def test_start_time_is_read_as_utc(self):
-        """POTA-L2-050: activityDate plus startTime, both UTC."""
-        at = srv._starts_at(_item(activityDate="2026-03-05", startTime="1400"))
+        """POTA-L2-050: startDate plus startTime, both UTC, `HH:MM` as sent.
+
+        This is the test that was wrong. It asserted `activityDate` and `1400`,
+        which no POTA response carries, so it passed while the code could not
+        read a single real entry (#32).
+        """
+        before = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        at = srv._starts_at(_item(startDate="2026-03-05", startTime="14:00"), now=before)
         assert at is not None
         assert (at.year, at.month, at.day, at.hour, at.minute) == (2026, 3, 5, 14, 0)
         assert at.tzinfo is not None
-        # Three digits is a valid HMM.
-        early = srv._starts_at(_item(startTime="730"))
+        # `HHMM` is accepted too, so a change back at POTA's end is not an outage.
+        assert srv._starts_at(_item(startTime="1400"), now=before) == at
+        early = srv._starts_at(_item(startTime="7:30"), now=before)
         assert early is not None and (early.hour, early.minute) == (7, 30)
+
+    def test_a_standing_schedule_starts_again_each_day_in_its_range(self):
+        """POTA-L2-095: a POTA entry is a date range, not one date.
+
+        The live feed carries entries like startDate 2026-02-15, endDate
+        2026-10-10, startTime 20:25 — the same daily window over eight months.
+        Read as a single date, every one of those is in the past and no window
+        ever contains it.
+        """
+        standing = _item(startDate="2026-02-15", endDate="2026-10-10", startTime="20:25")
+        # Mid-range, before that day's window: today's occurrence.
+        at = srv._starts_at(standing, now=datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour, at.minute) == (6, 1, 20, 25)
+        # Mid-range, after it: tomorrow's.
+        at = srv._starts_at(standing, now=datetime(2026, 6, 1, 22, 0, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour, at.minute) == (6, 2, 20, 25)
+        # Past the end: the last occurrence, which no future window contains.
+        at = srv._starts_at(standing, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour, at.minute) == (10, 10, 20, 25)
+
+    def test_a_missing_end_date_is_read_as_a_single_day(self):
+        """POTA-L2-096: the narrower reading, never a window POTA did not publish."""
+        one = _item(startDate="2026-03-05", endDate="", startTime="14:00")
+        at = srv._starts_at(one, now=datetime(2026, 3, 6, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour) == (3, 5, 14)
+        # An end before the start is not a range either.
+        backwards = _item(startDate="2026-03-05", endDate="2026-03-01")
+        at = srv._starts_at(backwards, now=datetime(2026, 3, 6, tzinfo=timezone.utc))
+        assert (at.month, at.day) == (3, 5)
 
     def test_an_unreadable_start_time_is_none_rather_than_a_guess(self):
         """POTA-L2-051: what POTA did not say is not invented."""
-        for bad in ("", "  ", "99", "abcd", "2460", "1399", "12345"):
+        for bad in ("", "  ", "99", "abcd", "24:60", "13:99", "12345", ":::"):
             assert srv._starts_at(_item(startTime=bad)) is None, bad
-        assert srv._starts_at(_item(activityDate="")) is None
-        assert srv._starts_at(_item(activityDate="not-a-date")) is None
+        assert srv._starts_at(_item(startDate="")) is None
+        assert srv._starts_at(_item(startDate="not-a-date")) is None
         assert srv._starts_at({}) is None
 
 
@@ -489,15 +538,15 @@ class TestScheduledWindowAgainstAFutureSchedule:
 
         def at(hours):
             when = datetime.now(timezone.utc) + timedelta(hours=hours)
-            return when.strftime("%Y-%m-%d"), when.strftime("%H%M")
+            return when.strftime("%Y-%m-%d"), when.strftime("%H:%M")
 
         soon_date, soon_time = at(2)
         later_date, later_time = at(30)
         items = [
             _item(activator="SOON", reference="US-0001",
-                  activityDate=soon_date, startTime=soon_time),
+                  startDate=soon_date, endDate=soon_date, startTime=soon_time),
             _item(activator="LATER", reference="US-0002",
-                  activityDate=later_date, startTime=later_time),
+                  startDate=later_date, endDate=later_date, startTime=later_time),
             _item(activator="NOTIME", reference="US-0003", startTime=""),
         ]
 

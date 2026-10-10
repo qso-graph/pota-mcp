@@ -54,6 +54,9 @@ _MOCK_SPOTS: list[dict[str, Any]] = [
         "comments": "CW up 2",
         "count": 23,
         "expire": 619,
+        # Both are null on a live row and present on every one of them (#32).
+        "parkName": None,
+        "invalid": None,
     },
     {
         "spotId": 47944497,
@@ -73,6 +76,8 @@ _MOCK_SPOTS: list[dict[str, Any]] = [
         "comments": "",
         "count": 8,
         "expire": 1200,
+        "parkName": None,
+        "invalid": None,
     },
 ]
 
@@ -94,6 +99,20 @@ _MOCK_PARK_INFO: dict[str, Any] = {
     "website": "https://www.nps.gov/acad/index.htm",
     "firstActivator": "K8ZT",
     "firstActivationDate": "2010-06-26",
+    # Also on a live row (#32). No tool reads these; they are here so the
+    # fixture is the response, and so a tool written against one of them is
+    # written against something that exists.
+    "parkId": 1,
+    "parktypeId": 41,
+    "referencePrefix": "US",
+    "active": 1,
+    "entityDeleted": 0,
+    "agencyURLs": "https://www.nps.gov/index.htm",
+    "parkURLs": "https://www.nps.gov/acad/index.htm",
+    "parkComments": None,
+    "accessibility": None,
+    "sensitivity": None,
+    "createdByAdmin": None,
 }
 
 _MOCK_PARK_STATS: dict[str, Any] = {
@@ -106,9 +125,15 @@ _MOCK_PARK_STATS: dict[str, Any] = {
 _MOCK_USER_STATS: dict[str, Any] = {
     "callsign": "K4SWL",
     "name": "Thomas Witherspoon",
+    # POTA does not send these today. They stay in the fixture on purpose: they
+    # are what proves _USER_STATS_FIELDS drops them, and the day POTA sends
+    # them again that proof has to still hold (#32).
     "qth": "123 Example Road",
     "gravatar": "0123456789abcdef0123456789abcdef",
     "activator": {"activations": 558, "parks": 129, "qsos": 12638},
+    # An object of the same shape as `activator`, not a count: activations
+    # tried against activations completed.
+    "attempts": {"activations": 573, "parks": 129, "qsos": 12638},
     "hunter": {"parks": 1455, "qsos": 2597},
     "awards": 41,
     "endorsements": 123,
@@ -193,43 +218,84 @@ _MOCK_PARK_LEADERBOARD: dict[str, Any] = {
     ],
 }
 
+# The field set GET /activation actually returns, checked against the live
+# endpoint (#32). What was here was invented, and three of its fields do not
+# exist: `scheduledActivationId` (POTA sends `scheduledActivitiesId`),
+# `activityDate` (POTA sends a `startDate`/`endDate` range) and `comment`
+# (POTA sends `comments`). `startTime` was `HHMM`; POTA sends `HH:MM`.
+#
+# That last pair is why this fixture mattered: pota_scheduled's `within_hours`
+# filter read `activityDate` and required four digits, so against the real API
+# it could never read a start time and discarded every activation as
+# unreadable. Mock tests passed because the fixture carried the fields the code
+# expected rather than the fields POTA sends.
+#
+# A POTA schedule entry is a date range plus a daily UTC window: a one-day
+# activation has startDate == endDate, and a standing one runs to a later
+# endDate with the same startTime each day. `activityStart`/`activityEnd` are
+# null on every live row seen, so nothing reads them.
 _MOCK_SCHEDULED: list[dict[str, Any]] = [
     {
-        "scheduledActivationId": 12345,
+        "scheduledActivitiesId": 141809,
+        "schedulerUserId": 87305,
         "activator": "N3VEM",
         "name": "Shenandoah",
         "reference": "US-0058",
         "locationDesc": "US-VA",
-        "activityDate": "2026-03-05",
-        "startTime": "1400",
-        "endTime": "1800",
-        "frequencies": "14.062, 7.030",
-        "comment": "CW only, weather permitting",
+        "startDate": "2026-03-05",
+        "endDate": "2026-03-05",
+        "startTime": "14:00",
+        "endTime": "18:00",
+        "activityStart": None,
+        "activityEnd": None,
+        "frequencies": "20 meter",
+        "comments": "CW only, weather permitting",
     },
 ]
 
+# The field set GET /location/parks/{loc} actually returns, checked against the
+# live endpoint (#32). It is not the set this fixture used to carry:
+#
+#   was:  activations  contacts  grid4  grid6  latitude  longitude  name
+#         parktypeDesc  reference
+#   live: activations  attempts  grid  latitude  locationDesc  longitude  name
+#         notes  qsos  reference  website
+#
+# `contacts` is `qsos` live, `grid4`/`grid6` is one `grid`, `parktypeDesc` is not
+# sent at all, and `attempts`, `locationDesc`, `notes` and `website` were missing.
+# Two of those matter to tools that already exist: `attempts` is how
+# pota_rare_parks_near tells a park nobody has finished from one nobody has tried
+# (#19), and `locationDesc` is what the region filter reads (#27). Both had to
+# bring feeds of their own because this fixture could not stand in for the API.
+#
+# The two parks and their coordinates are unchanged, so the distance and ordering
+# tests still measure what they measured; only the shape is corrected.
 _MOCK_LOCATION_PARKS: list[dict[str, Any]] = [
     {
         "reference": "US-4567",
         "name": "Boise National Forest",
         "latitude": 43.617,
         "longitude": -115.993,
-        "grid4": "DN13",
-        "grid6": "DN13la",
-        "parktypeDesc": "National Forest",
+        "grid": "DN13la",
+        "locationDesc": "US-ID",
         "activations": 12,
-        "contacts": 456,
+        "attempts": 14,
+        "qsos": 456,
+        "notes": "",
+        "website": "https://www.fs.usda.gov/boise",
     },
     {
         "reference": "US-4568",
         "name": "Lucky Peak State Park",
         "latitude": 43.531,
         "longitude": -116.048,
-        "grid4": "DN13",
-        "grid6": "DN13lm",
-        "parktypeDesc": "State Park",
+        "grid": "DN13lm",
+        "locationDesc": "US-ID",
         "activations": 5,
-        "contacts": 187,
+        "attempts": 5,
+        "qsos": 187,
+        "notes": "",
+        "website": "https://parksandrecreation.idaho.gov/parks/lucky-peak/",
     },
 ]
 

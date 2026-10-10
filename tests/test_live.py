@@ -208,3 +208,97 @@ def test_park_info_case_insensitive_live(client):
     result = client.park_info("us-0001")
     assert "error" not in result, f"park_info('us-0001') returned error: {result}"
     assert result.get("reference") == KNOWN_PARK, "Reference should be normalized to uppercase"
+
+
+# ---------------------------------------------------------------------------
+# Fixture drift (#32)
+#
+# A mock test passing says nothing about a field the API actually sends. This
+# fixture had carried `contacts` where POTA sends `qsos`, `grid4`/`grid6` where
+# POTA sends one `grid`, a `parktypeDesc` POTA does not send on this endpoint at
+# all, and nothing for `attempts`, `locationDesc`, `notes` or `website` — so two
+# recent changes (#19, #27) had to bring feeds of their own rather than use it.
+#
+# These tests compare each fixture's field set against the live endpoint it
+# stands in for, so the next divergence is a failure rather than a surprise.
+# They run only with --live, on demand: the point is to be run before a release,
+# not on every push.
+
+
+def _fields(payload):
+    """The union of keys across a response, whether it is one object or many.
+
+    A union rather than the first row's keys: POTA omits a field on a row that
+    has no value for it, so one row is not evidence of the shape.
+    """
+    if isinstance(payload, dict):
+        return set(payload)
+    fields = set()
+    for row in payload or []:
+        if isinstance(row, dict):
+            fields |= set(row)
+    return fields
+
+
+# Each fixture, with a live call that returns the same thing. The location is
+# Rhode Island for the park list: small enough to be one quick request and large
+# enough to carry rows with and without optional fields.
+_FIXTURES = [
+    ("_MOCK_SPOTS", lambda c: c.spots()),
+    ("_MOCK_PARK_INFO", lambda c: c.park_info(KNOWN_PARK)),
+    ("_MOCK_PARK_STATS", lambda c: c.park_stats(KNOWN_PARK)),
+    ("_MOCK_USER_STATS", lambda c: c.user_stats(KNOWN_USER)),
+    ("_MOCK_SCHEDULED", lambda c: c.scheduled()),
+    ("_MOCK_LOCATION_PARKS", lambda c: c.location_parks("US-RI")),
+]
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("name,call", _FIXTURES, ids=[n for n, _ in _FIXTURES])
+def test_fixture_carries_no_field_the_api_does_not_send(client, name, call):
+    """POTA-L3-016: a fixture field POTA no longer sends is drift, and fails here.
+
+    This is the direction that makes a mock test lie: a fixture naming a field
+    the API does not send lets a tool read it in mock mode and find nothing in
+    real use.
+    """
+    from pota_mcp import client as mod
+
+    live = _fields(call(client))
+    if not live:
+        pytest.skip(f"{name}: the live endpoint returned nothing to compare against")
+    phantom = _fields(getattr(mod, name)) - live
+    # POTA has stopped sending these two. They stay in the fixture on purpose:
+    # they are what proves _USER_STATS_FIELDS drops them, and that proof has to
+    # still hold the day POTA sends them again.
+    if name == "_MOCK_USER_STATS":
+        phantom -= {"qth", "gravatar"}
+    assert not phantom, (
+        f"{name} carries {sorted(phantom)}, which the live endpoint does not send. "
+        "Recapture the fixture from the live response."
+    )
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("name,call", _FIXTURES, ids=[n for n, _ in _FIXTURES])
+def test_fixture_carries_every_field_the_api_sends(client, name, call):
+    """POTA-L3-017: a field POTA added that no fixture carries cannot be used.
+
+    Softer than the test above — a new field breaks nothing — but it is how a
+    field like `attempts` goes unnoticed until a tool needs it and has to build
+    its own feed to get at it.
+    """
+    from pota_mcp import client as mod
+
+    live = _fields(call(client))
+    if not live:
+        pytest.skip(f"{name}: the live endpoint returned nothing to compare against")
+    missing = live - _fields(getattr(mod, name))
+    # user_stats is projected deliberately: _USER_STATS_FIELDS drops qth and
+    # gravatar because this product does not republish personal details.
+    if name == "_MOCK_USER_STATS":
+        missing -= {"qth", "gravatar"}
+    assert not missing, (
+        f"The live endpoint sends {sorted(missing)}, which {name} does not carry. "
+        "Recapture the fixture so a tool can be written against the whole response."
+    )

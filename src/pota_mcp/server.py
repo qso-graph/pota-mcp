@@ -223,25 +223,71 @@ def pota_user_stats(callsign: str) -> dict[str, Any]:
 # copies of one rule does.
 
 
-def _starts_at(item: dict[str, Any]) -> datetime | None:
-    """When the activation starts, in UTC, or None if POTA did not say.
-
-    `activityDate` is `YYYY-MM-DD` and `startTime` is `HHMM`, both UTC. An
-    entry whose start cannot be read is not silently dropped: the count of
-    those is reported, because an activation missing from a filtered list looks
-    the same as one that was never scheduled.
-    """
-    date, time = str(item.get("activityDate", "")), str(item.get("startTime", "")).strip()
-    if not date or len(time) not in (3, 4) or not time.isdigit():
+def _clock_time(value: object) -> tuple[int, int] | None:
+    """`HH:MM` as POTA sends it, or `HHMM`, as (hour, minute). None if neither."""
+    text = str(value or "").strip()
+    digits = text.replace(":", "")
+    if len(digits) not in (3, 4) or not digits.isdigit():
         return None
+    hour, minute = int(digits[:-2]), int(digits[-2:])
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def _utc_date(value: object) -> datetime | None:
+    """A POTA `YYYY-MM-DD` as midnight UTC, or None."""
     try:
-        hour, minute = int(time[:-2]), int(time[-2:])
-        if hour > 23 or minute > 59:
-            return None
-        day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        day = datetime.strptime(str(value or "").strip(), "%Y-%m-%d")
+        return day.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
-    return day + timedelta(hours=hour, minutes=minute)
+
+
+def _starts_at(item: dict[str, Any], now: datetime | None = None) -> datetime | None:
+    """The next time this activation starts, in UTC, or None if POTA did not say.
+
+    A POTA schedule entry is a **date range plus a daily UTC window**:
+    `startDate` and `endDate` are `YYYY-MM-DD`, `startTime` and `endTime` are
+    `HH:MM`. A one-day activation has `startDate == endDate`; a standing one
+    runs to a later `endDate` at the same `startTime` each day. So "starts" is
+    the next occurrence of `startTime` on a day inside the range — and for an
+    entry whose range has already passed, the last occurrence, which no future
+    window contains.
+
+    An entry whose start cannot be read is not silently dropped: the count of
+    those is reported, because an activation missing from a filtered list looks
+    the same as one that was never scheduled.
+
+    Found by the live fixture check (#32). This read `activityDate`, which POTA
+    does not send, and required `startTime` to be four digits, which `14:00` is
+    not — so against the real API it returned None for every entry and the
+    `within_hours` filter reported the whole schedule as unreadable.
+    """
+    clock = _clock_time(item.get("startTime"))
+    begins = _utc_date(item.get("startDate"))
+    if clock is None or begins is None:
+        return None
+    hour, minute = clock
+    window = timedelta(hours=hour, minutes=minute)
+    # endDate missing or unreadable: treat it as a single day, which is the
+    # narrower reading and never invents a window POTA did not publish.
+    ends = _utc_date(item.get("endDate")) or begins
+    if ends < begins:
+        ends = begins
+
+    moment = now or datetime.now(timezone.utc)
+    first = begins + window
+    if moment <= first:
+        return first
+    # Inside the range, or past it: the next daily occurrence at or after now,
+    # bounded by the last day the entry runs.
+    day = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    if moment > day + window:
+        day += timedelta(days=1)
+    if day > ends:
+        return ends + window
+    return day + window
 
 
 def _matches(
