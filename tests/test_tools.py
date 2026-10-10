@@ -791,3 +791,106 @@ class TestParkLeaderboardTool:
         result = srv.pota_park_leaderboard("../../etc/passwd")
         assert "error" in result and "not a park reference" in result["error"]
         assert "activations" not in result
+
+
+# ---------------------------------------------------------------------------
+# pota_rare_parks_near (#19)
+# ---------------------------------------------------------------------------
+
+
+class TestRareParksNear:
+    """A feed of its own: the mock has two parks, both activated.
+
+    The case that matters is a rarely-activated park that is *not* among the
+    nearest, which is what decides whether the candidate list may be capped by
+    distance before it is sorted by activations.
+    """
+
+    @pytest.fixture(autouse=True)
+    def feed(self, monkeypatch):
+        monkeypatch.setattr(srv, "_client", None)
+        parks = [
+            # Nearest, and well activated.
+            {"reference": "US-0001", "name": "Close and busy", "latitude": 43.60,
+             "longitude": -116.00, "activations": 40, "attempts": 42, "qsos": 3000},
+            # Middling distance, middling count.
+            {"reference": "US-0002", "name": "Middle", "latitude": 43.40,
+             "longitude": -116.00, "activations": 5, "attempts": 5, "qsos": 200},
+            # Far, and never activated — the one an activator wants.
+            {"reference": "US-0003", "name": "Far and untouched", "latitude": 43.00,
+             "longitude": -116.00, "activations": 0, "attempts": 0, "qsos": 0},
+            # Far, tried and not finished: attempts but no activation.
+            {"reference": "US-0004", "name": "Tried and failed", "latitude": 43.05,
+             "longitude": -116.00, "activations": 0, "attempts": 3, "qsos": 14},
+            # Outside any radius used below.
+            {"reference": "US-0009", "name": "Another state away", "latitude": 20.0,
+             "longitude": -116.00, "activations": 0, "attempts": 0, "qsos": 0},
+        ]
+        monkeypatch.setattr(POTAClient, "_get_json", lambda self, url: list(parks))
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        return parks
+
+    def test_least_activated_first_then_nearest(self):
+        """POTA-L2-087: the order the question asks for."""
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200)
+        assert [p["reference"] for p in result["parks"]] == [
+            "US-0004",  # 0 activations, nearer of the two
+            "US-0003",  # 0 activations, further
+            "US-0002",  # 5
+            "US-0001",  # 40
+        ]
+
+    def test_a_rare_park_outside_the_nearest_few_is_still_found(self):
+        """POTA-L2-088: the reason the candidate list is not capped by distance.
+
+        Asking for one park must give the rarest in the radius, not the
+        nearest. A list already cut to the nearest would answer US-0001.
+        """
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200, limit=1)
+        assert [p["reference"] for p in result["parks"]] == ["US-0004"]
+
+    def test_never_activated_is_flagged_and_counted(self):
+        """POTA-L2-089: explicitly, per the acceptance criterion."""
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200)
+        flags = {p["reference"]: p["never_activated"] for p in result["parks"]}
+        assert flags == {"US-0004": True, "US-0003": True, "US-0002": False, "US-0001": False}
+        assert result["never_activated"] == 2
+
+    def test_attempts_come_through_so_tried_and_failed_is_visible(self):
+        """POTA-L2-090: never activated and never attempted are different
+        facts, and POTA already carries both."""
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200)
+        by_ref = {p["reference"]: p for p in result["parks"]}
+        assert by_ref["US-0004"]["attempts"] == 3 and by_ref["US-0004"]["activations"] == 0
+        assert by_ref["US-0003"]["attempts"] == 0
+
+    def test_the_radius_excludes(self):
+        """POTA-L2-091: not vacuous — the radius really does cut the list.
+
+        Distances from the centre, measured: US-0001 2.0 km, US-0002 24.1 km,
+        US-0004 63.1 km, US-0003 68.6 km, US-0009 another state. So 30 km
+        keeps the first two and drops the never-activated pair — and of the
+        two kept, the less-activated comes first.
+        """
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=30)
+        assert [p["reference"] for p in result["parks"]] == ["US-0002", "US-0001"]
+        assert result["never_activated"] == 0
+
+    def test_a_radius_that_reaches_nothing_returns_nothing(self):
+        """POTA-L2-094: an empty answer, not an error and not everything."""
+        result = srv.pota_rare_parks_near("US-ID", 10.0, 10.0, radius_km=5)
+        assert result["total"] == 0 and result["parks"] == []
+        assert result["never_activated"] == 0
+
+    def test_limit_and_radius_are_clamped_and_nulls_are_defaults(self):
+        """POTA-L2-092: the #1 convention, and bounds that hold."""
+        null = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=None, limit=None)
+        assert null["radius_km"] == 50.0
+        absurd = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=99999, limit=9999)
+        assert absurd["radius_km"] == 500.0
+        assert len(absurd["parks"]) <= 100
+
+    def test_nearby_parks_still_sorts_by_distance(self):
+        """POTA-L2-093: the extraction must not have changed the other caller."""
+        nearest = POTAClient().nearby_parks("US-ID", 43.617, -116.00, radius_km=200, limit=3)
+        assert [p["reference"] for p in nearest] == ["US-0001", "US-0002", "US-0004"]

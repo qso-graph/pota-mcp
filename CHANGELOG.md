@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **`pota_rare_parks_near`**, a new tool (#19): parks near a point, least activated first and
+  nearest among equals, each flagged `never_activated`. Answers "which parks near me have never, or
+  rarely, been activated?". POTA's `attempts` comes through untouched, because a park that has been
+  tried and not finished is a different fact from one nobody has been to, and POTA carries both.
+  - **It costs one request.** `/location/parks/{loc}` already returns each park's activations,
+    attempts and qsos, so the per-park `/park/stats/{ref}` calls the issue planned for — and the
+    candidate cap it wanted in order to respect POTA's servers — are not needed.
+  - The candidate list is **not** capped by distance before being sorted by activations. A list cut
+    to the twenty-five nearest cannot answer the question if the never-activated park is fortieth
+    nearest. `nearby_parks` and this tool now share one uncapped candidate step and cap by
+    different things.
+
 - **`pota_park_activations`**, a new tool (#17): recent activations of a park, most recent first,
   with each activator's callsign, date, total QSOs and the CW, data and phone counts. Answers "when
   was this park last activated?" and "is it often on the air?". `count` is 1 to 50, default 10, and
