@@ -176,6 +176,23 @@ _MOCK_PARK_ACTIVATIONS = [
     },
 ]
 
+# From the live endpoint, GET /park/leaderboard/{reference}, 2026-10-10. POTA
+# returns three boards of five, each row a callsign and a count.
+_MOCK_PARK_LEADERBOARD = {
+    "activations": [
+        {"callsign": "KD2WZW", "count": 5},
+        {"callsign": "N1NDN", "count": 3},
+    ],
+    "activator_qsos": [
+        {"callsign": "KD2WZW", "count": 189},
+        {"callsign": "N1NDN", "count": 152},
+    ],
+    "hunter_qsos": [
+        {"callsign": "N4CD", "count": 44},
+        {"callsign": "AF2V", "count": 31},
+    ],
+}
+
 _MOCK_SCHEDULED = [
     {
         "scheduledActivationId": 12345,
@@ -379,6 +396,44 @@ class POTAClient:
 
         self._cache_set(key, data, _STATS_TTL)
         return data
+
+    # The boards POTA publishes for a park. Named here rather than read off the
+    # response so a board POTA adds later is not passed on without anybody
+    # deciding to, which is the same rule the projection below follows.
+    LEADERBOARDS = ("activations", "activator_qsos", "hunter_qsos")
+
+    def park_leaderboard(self, reference: str, limit: int = 10) -> dict[str, Any]:
+        """The callsigns with the most activations and QSOs at a park.
+
+        Each row is reduced to a callsign and a count, and nothing else.
+        POTA's user endpoint already had to have `qth` — which can hold a
+        street address — and `gravatar`, a hash of an email address, stripped
+        out of it (#15). Trusting a response to carry only what it carries
+        today is how that happened, so the shape is chosen here rather than
+        relayed.
+        """
+        ref = reference.strip().upper()
+        key = f"park_leaderboard:{ref}:{limit}"
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
+        if _is_mock():
+            raw = {k: list(v) for k, v in _MOCK_PARK_LEADERBOARD.items()}
+        else:
+            raw = self._get_json(f"{_BASE}/park/leaderboard/{urllib.parse.quote(ref)}") or {}
+
+        boards: dict[str, Any] = {}
+        for name in self.LEADERBOARDS:
+            rows = raw.get(name) or []
+            boards[name] = [
+                {"callsign": str(row.get("callsign", "")).upper(), "count": row.get("count", 0)}
+                for row in rows[:limit]
+                if isinstance(row, dict) and row.get("callsign")
+            ]
+
+        self._cache_set(key, boards, _STATS_TTL)
+        return boards
 
     def user_stats(self, callsign: str) -> dict[str, Any]:
         """Get activator/hunter stats by callsign."""

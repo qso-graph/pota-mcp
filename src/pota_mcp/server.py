@@ -164,6 +164,34 @@ def pota_park_activations(reference: str, count: int | None = 10) -> dict[str, A
 
 
 @mcp.tool()
+def pota_park_leaderboard(reference: str, limit: int | None = 10) -> dict[str, Any]:
+    """Top activators and hunters of a POTA park.
+
+    Three boards: most activations, most QSOs as an activator, most QSOs as a
+    hunter. Each row is a callsign and a count and nothing else.
+
+    Args:
+        reference: Park reference code (e.g., US-0062).
+        limit: Rows per board (default 10, max 25). POTA currently publishes
+            five per board, so a higher limit changes nothing until it does.
+
+    Returns:
+        The park reference and the three boards.
+    """
+    try:
+        # Coerce None → default (llama.cpp/mcpo sends null for optional params, #1)
+        limit = limit if limit is not None else 10
+        limit = min(max(int(limit), 1), 25)
+        ref = reference.strip().upper()
+        if not valid_reference(ref):
+            return {"error": f"{reference!r} is not a park reference. They look like US-0062."}
+        boards = _get_client().park_leaderboard(ref, limit=limit)
+        return {"reference": ref, **boards}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
 def pota_user_stats(callsign: str) -> dict[str, Any]:
     """Get POTA activator and hunter statistics for a callsign.
 

@@ -613,6 +613,13 @@ class TestReferenceValidation:
 
 
 class TestParkActivationsTool:
+    @pytest.fixture(autouse=True)
+    def fresh_server_client(self, monkeypatch):
+        """A client per test: see the note on the leaderboard tests. These
+        happen to use distinct references and so pass either way, which is a
+        property of the data rather than of the tests."""
+        monkeypatch.setattr(srv, "_client", None)
+
     def test_returns_recent_activations(self):
         """POTA-L2-072: reference, count and the rows."""
         result = srv.pota_park_activations("US-0062")
@@ -675,3 +682,112 @@ class TestParkActivationsTool:
         shorter cached answer."""
         assert len(client.park_activations("US-0062", count=1)) == 1
         assert len(client.park_activations("US-0062", count=2)) == 2
+
+
+# ---------------------------------------------------------------------------
+# pota_park_leaderboard (#18)
+# ---------------------------------------------------------------------------
+
+
+class TestParkLeaderboardTool:
+    @pytest.fixture(autouse=True)
+    def fresh_server_client(self, monkeypatch):
+        """A client per test, because the cache outlives one.
+
+        `server._get_client()` returns a process-wide singleton and its cache
+        is keyed by park and limit, so a park another test has already fetched
+        is answered from cache and a patched `_get_json` is never called. Two
+        of the tests below passed on their own and failed in the suite for
+        exactly that reason.
+        """
+        monkeypatch.setattr(srv, "_client", None)
+
+    def test_returns_the_three_boards(self):
+        """POTA-L2-079: activations, activator QSOs, hunter QSOs."""
+        result = srv.pota_park_leaderboard("US-0062")
+        assert result["reference"] == "US-0062"
+        for board in ("activations", "activator_qsos", "hunter_qsos"):
+            assert board in result, board
+            assert result[board], board
+
+    def test_a_row_is_a_callsign_and_a_count_and_nothing_else(self):
+        """POTA-L2-080: the acceptance criterion, enforced rather than trusted.
+
+        POTA's user endpoint had to have `qth`, which can hold a street
+        address, and `gravatar`, a hash of an email address, stripped out of it
+        (#15). The shape is chosen here so a field POTA adds later is not
+        passed on because nobody noticed.
+        """
+        result = srv.pota_park_leaderboard("US-0062")
+        for board in POTAClient.LEADERBOARDS:
+            for row in result[board]:
+                assert set(row) == {"callsign", "count"}, row
+
+    def test_a_field_pota_adds_later_is_not_passed_on(self, monkeypatch):
+        """POTA-L2-081: the control for the test above — it has to actually
+        drop something, or it only proves POTA is tidy today."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [
+                    {"callsign": "K1ABC", "count": 4, "qth": "12 Mill Lane", "gravatar": "deadbeef"}
+                ],
+                "activator_qsos": [],
+                "hunter_qsos": [],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        result = srv.pota_park_leaderboard("US-0062")
+        assert result["activations"] == [{"callsign": "K1ABC", "count": 4}]
+        assert "qth" not in str(result) and "Mill Lane" not in str(result)
+
+    def test_a_board_pota_adds_later_is_not_passed_on_either(self, monkeypatch):
+        """POTA-L2-082: the boards are named, not read off the response."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [], "activator_qsos": [], "hunter_qsos": [],
+                "something_new": [{"callsign": "K1ABC", "count": 1}],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        assert "something_new" not in srv.pota_park_leaderboard("US-0062")
+
+    def test_rows_are_bounded_per_board(self, monkeypatch):
+        """POTA-L2-083: a board longer than asked for is cut."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [{"callsign": f"K{i}AAA", "count": i} for i in range(40)],
+                "activator_qsos": [], "hunter_qsos": [],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        assert len(srv.pota_park_leaderboard("US-0062", limit=3)["activations"]) == 3
+        # And the ceiling holds against an absurd request.
+        assert len(srv.pota_park_leaderboard("US-0063", limit=9999)["activations"]) == 25
+
+    def test_a_malformed_row_is_dropped_rather_than_returned_empty(self, monkeypatch):
+        """POTA-L2-084: a row with no callsign is not a row."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [{"count": 3}, "nonsense", {"callsign": "", "count": 1},
+                                {"callsign": "K1ABC", "count": 2}],
+                "activator_qsos": [], "hunter_qsos": [],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        assert srv.pota_park_leaderboard("US-0062")["activations"] == [
+            {"callsign": "K1ABC", "count": 2}
+        ]
+
+    def test_null_limit_is_the_default(self):
+        """POTA-L2-085: llama.cpp/mcpo sends null for optional params (#1)."""
+        assert "error" not in srv.pota_park_leaderboard("US-0062", limit=None)
+
+    def test_a_reference_that_is_not_one_is_refused(self):
+        """POTA-L2-086: validated before the request, as in #17."""
+        result = srv.pota_park_leaderboard("../../etc/passwd")
+        assert "error" in result and "not a park reference" in result["error"]
+        assert "activations" not in result
