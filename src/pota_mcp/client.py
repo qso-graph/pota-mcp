@@ -7,6 +7,7 @@ import math
 import os
 import threading
 import time
+import re
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -126,6 +127,23 @@ _USER_STATS_FIELDS = (
     "endorsements",
 )
 
+# A POTA reference: an entity prefix, a hyphen, a number. `US-0062`, `JP-0123`,
+# `CU-0332`, `G-0001`, and prefixes carry digits too — `9A`, `3B8`, `4U1A`.
+#
+# Deliberately loose about the prefix and strict about the shape. POTA adds
+# entities, and a pattern that enumerated prefixes would reject a real park the
+# day one is added; what this rejects is input that is not a reference at all.
+# `urllib.parse.quote` already stops a path escaping the URL, so this is about
+# answering "that is not a park reference" instead of passing it on and
+# relaying a 404.
+_REFERENCE = re.compile(r"^[A-Z0-9]{1,8}-[0-9]{1,6}$")
+
+
+def valid_reference(reference: str) -> bool:
+    """Whether this looks like a POTA park reference."""
+    return bool(_REFERENCE.match(str(reference).strip().upper()))
+
+
 def regions(item: dict[str, Any]) -> list[str]:
     """The location codes a park is in, normalised.
 
@@ -145,6 +163,18 @@ def regions(item: dict[str, Any]) -> list[str]:
         if part.strip()
     ]
 
+
+# From the live endpoint, GET /park/activations/US-0062?count=N, 2026-10-10.
+_MOCK_PARK_ACTIVATIONS = [
+    {
+        "activeCallsign": "KD0JYV", "qso_date": "20260826", "totalQSOs": 12,
+        "qsosCW": 0, "qsosDATA": 12, "qsosPHONE": 0, "locationDesc": "US-NY",
+    },
+    {
+        "activeCallsign": "KD2WZW", "qso_date": "20260814", "totalQSOs": 41,
+        "qsosCW": 20, "qsosDATA": 0, "qsosPHONE": 21, "locationDesc": "US-NY",
+    },
+]
 
 _MOCK_SCHEDULED = [
     {
@@ -324,6 +354,28 @@ class POTAClient:
 
         if not data:
             return {"reference": ref, "error": "Not found"}
+
+        self._cache_set(key, data, _STATS_TTL)
+        return data
+
+    def park_activations(self, reference: str, count: int = 10) -> list[dict[str, Any]]:
+        """Recent activations of a park, most recent first.
+
+        `count` is passed to POTA and is part of the cache key, so asking for
+        more than was cached fetches rather than returning a short answer.
+        """
+        ref = reference.strip().upper()
+        key = f"park_activations:{ref}:{count}"
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
+
+        if _is_mock():
+            data = list(_MOCK_PARK_ACTIVATIONS)[:count]
+        else:
+            data = self._get_json(
+                f"{_BASE}/park/activations/{urllib.parse.quote(ref)}?count={count}"
+            ) or []
 
         self._cache_set(key, data, _STATS_TTL)
         return data

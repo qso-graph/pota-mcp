@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **`pota_park_activations`**, a new tool (#17): recent activations of a park, most recent first,
+  with each activator's callsign, date, total QSOs and the CW, data and phone counts. Answers "when
+  was this park last activated?" and "is it often on the air?". `count` is 1 to 50, default 10, and
+  is part of the cache key so asking for more than was cached fetches rather than returning a
+  shorter answer.
+- **Park references are validated** before a request is made. A reference is an entity prefix, a
+  hyphen and a number — loose about the prefix because POTA adds entities and a list of prefixes
+  would reject a real park the day a new one appears, strict about the shape. Without it POTA
+  answers 404 and the caller is told the park does not exist, which is a different fact from "that
+  is not a reference".
+
 - **`pota_scheduled` takes optional filters** (#20): `location`, `reference`, `activator` and
   `within_hours`. They combine with AND, and an unfiltered call returns exactly what it always
   did — the same two keys, no extra ones. When a filter is given the result also reports what was

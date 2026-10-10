@@ -9,7 +9,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from . import __spec_version__, __version__
-from .client import POTAClient, regions
+from .client import POTAClient, regions, valid_reference
 
 mcp = FastMCP(
     "pota-mcp",
@@ -130,6 +130,35 @@ def pota_park_stats(reference: str) -> dict[str, Any]:
     """
     try:
         return _get_client().park_stats(reference)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def pota_park_activations(reference: str, count: int | None = 10) -> dict[str, Any]:
+    """List recent activations of a POTA park, most recent first.
+
+    Answers "when was this park last activated?" and "is it often on the air?".
+
+    Args:
+        reference: Park reference code (e.g., US-0062).
+        count: How many recent activations to return (default 10, max 50).
+
+    Returns:
+        Each activation's callsign, date, total QSOs and the CW, data and phone
+        counts, with the park reference and how many were returned.
+    """
+    try:
+        # Coerce None → default (llama.cpp/mcpo sends null for optional params, #1)
+        count = count if count is not None else 10
+        count = min(max(int(count), 1), 50)
+        ref = reference.strip().upper()
+        if not valid_reference(ref):
+            # Said rather than passed on: POTA would answer 404 and the caller
+            # would be told the park does not exist, which is a different fact.
+            return {"error": f"{reference!r} is not a park reference. They look like US-0062."}
+        activations = _get_client().park_activations(ref, count=count)
+        return {"reference": ref, "count": len(activations), "activations": activations}
     except Exception as e:
         return {"error": str(e)}
 
