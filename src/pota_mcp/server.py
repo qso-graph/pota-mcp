@@ -9,7 +9,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from . import __spec_version__, __version__
-from .client import POTAClient
+from .client import POTAClient, regions
 
 mcp = FastMCP(
     "pota-mcp",
@@ -160,18 +160,10 @@ def pota_user_stats(callsign: str) -> dict[str, Any]:
 # combination of filters. `spots` takes the other route and keys its cache by
 # its filters, which means a different band is a different cache entry and a
 # fresh fetch.
-
-
-def _regions(item: dict[str, Any]) -> list[str]:
-    """The location codes an activation is in.
-
-    POTA's `locationDesc` is comma-separated for a park that spans regions —
-    one on a state line is `US-VA,US-MD` — so a park is matched when the code
-    is *among* its regions rather than equal to the whole field. `pota_spots`
-    compares the field for equality and so misses those parks; reported
-    separately rather than copied.
-    """
-    return [part.strip().upper() for part in str(item.get("locationDesc", "")).split(",") if part.strip()]
+#
+# `regions` is the client's, shared with `spots` (#27): the region test was
+# written here first and then found missing there, which is exactly what two
+# copies of one rule does.
 
 
 def _starts_at(item: dict[str, Any]) -> datetime | None:
@@ -202,7 +194,7 @@ def _matches(
     activator: str,
 ) -> bool:
     """Whether one activation passes every text filter given (AND)."""
-    if location and location.upper() not in _regions(item):
+    if location and location.upper() not in regions(item):
         return False
     if reference and str(item.get("reference", "")).upper() != reference.upper():
         return False

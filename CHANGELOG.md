@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - An activation POTA gave no readable start date and time for is **counted and reported**, not
     dropped: missing from a filtered list, it would look like one that was never scheduled.
   - Filtering is applied to the cached feed, so one fetch serves every combination of filters.
+- **`pota_spots` filtering by `location` now finds a park that spans regions** (#27). It compared
+  POTA's whole `locationDesc` field for equality, so a park listed under more than one code never
+  matched: on the live spot feed on 2026-10-10, five of 111 spots carried more than one code, the
+  North Country Trail among them with eight states. Filtering by any of those eight missed it. The
+  region test is now shared with `pota_scheduled` rather than written twice, which is how one tool
+  came to be right and the other wrong. Both sides of the comparison are normalised too — only the
+  filter was before, so a single-region park would also have failed to match had POTA returned the
+  field in another case.
 
 ## [0.2.6] — 2026-10-09
 
