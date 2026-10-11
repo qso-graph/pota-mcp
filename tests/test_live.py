@@ -49,7 +49,9 @@ def test_park_info_live(client):
     """POTA-L3-002: park_info('US-0001') returns Acadia with correct fields."""
     result = client.park_info(KNOWN_PARK)
     assert "error" not in result, f"park_info returned error: {result}"
-    assert "Acadia" in result.get("name", ""), f"Expected 'Acadia' in name, got: {result.get('name')}"
+    assert "Acadia" in result.get("name", ""), (
+        f"Expected 'Acadia' in name, got: {result.get('name')}"
+    )
     assert "latitude" in result, "Missing latitude"
     assert "longitude" in result, "Missing longitude"
     assert "grid4" in result, "Missing grid4"
@@ -100,7 +102,9 @@ def test_user_stats_live(client):
     result = client.user_stats(KNOWN_USER)
     assert "error" not in result, f"user_stats returned error: {result}"
     assert "qth" not in result and "gravatar" not in result
-    assert result.get("callsign") == KNOWN_USER, f"Expected callsign {KNOWN_USER}, got: {result.get('callsign')}"
+    assert result.get("callsign") == KNOWN_USER, (
+        f"Expected callsign {KNOWN_USER}, got: {result.get('callsign')}"
+    )
     assert isinstance(result.get("activator"), dict), "activator should be a dict"
     assert isinstance(result.get("hunter"), dict), "hunter should be a dict"
 
@@ -135,7 +139,9 @@ def test_location_parks_live(client):
     assert isinstance(result, list), "location_parks() must return a list"
     assert len(result) > 0, "Maine should have parks"
     references = [p.get("reference") for p in result]
-    assert KNOWN_PARK in references, f"US-0001 not found in Maine parks (got {len(result)} parks)"
+    assert KNOWN_PARK in references, (
+        f"US-0001 not found in Maine parks (got {len(result)} parks)"
+    )
 
 
 # POTA-L3-011: location_parks entries have park fields
@@ -171,10 +177,15 @@ def test_nearby_parks_includes_acadia_live(client):
     """POTA-L3-013: nearby_parks near Acadia coords should include US-0001."""
     result = client.nearby_parks(KNOWN_LOCATION, ACADIA_LAT, ACADIA_LON, radius_km=50.0)
     references = [p.get("reference") for p in result]
-    assert KNOWN_PARK in references, "Acadia (US-0001) should appear in nearby parks near its own coordinates"
+    assert KNOWN_PARK in references, (
+        "Acadia (US-0001) should appear in nearby parks near its own coordinates"
+    )
     # Acadia should be very close to itself
     acadia = next(p for p in result if p.get("reference") == KNOWN_PARK)
-    assert acadia["distance_km"] < 10.0, f"Acadia distance from its own coords should be < 10 km, got {acadia['distance_km']}"
+    assert acadia["distance_km"] < 10.0, (
+        "Acadia distance from its own coords should be < 10 km, "
+        f"got {acadia['distance_km']}"
+    )
 
 
 # POTA-L3-014: spots with band filter
@@ -185,7 +196,8 @@ def test_spots_band_filter_live(client):
     assert isinstance(result, list), "spots(band='20m') must return a list"
     # If there are results, all should be on 20m (14.0-14.35 MHz)
     for spot in result:
-        freq = float(spot["frequency"]) / 1000.0 if float(spot["frequency"]) > 1000 else float(spot["frequency"])
+        khz = float(spot["frequency"])
+        freq = khz / 1000.0 if khz > 1000 else khz
         assert 14.0 <= freq <= 14.35, f"Spot frequency {freq} MHz is not on 20m"
 
 
@@ -196,3 +208,97 @@ def test_park_info_case_insensitive_live(client):
     result = client.park_info("us-0001")
     assert "error" not in result, f"park_info('us-0001') returned error: {result}"
     assert result.get("reference") == KNOWN_PARK, "Reference should be normalized to uppercase"
+
+
+# ---------------------------------------------------------------------------
+# Fixture drift (#32)
+#
+# A mock test passing says nothing about a field the API actually sends. This
+# fixture had carried `contacts` where POTA sends `qsos`, `grid4`/`grid6` where
+# POTA sends one `grid`, a `parktypeDesc` POTA does not send on this endpoint at
+# all, and nothing for `attempts`, `locationDesc`, `notes` or `website` — so two
+# recent changes (#19, #27) had to bring feeds of their own rather than use it.
+#
+# These tests compare each fixture's field set against the live endpoint it
+# stands in for, so the next divergence is a failure rather than a surprise.
+# They run only with --live, on demand: the point is to be run before a release,
+# not on every push.
+
+
+def _fields(payload):
+    """The union of keys across a response, whether it is one object or many.
+
+    A union rather than the first row's keys: POTA omits a field on a row that
+    has no value for it, so one row is not evidence of the shape.
+    """
+    if isinstance(payload, dict):
+        return set(payload)
+    fields = set()
+    for row in payload or []:
+        if isinstance(row, dict):
+            fields |= set(row)
+    return fields
+
+
+# Each fixture, with a live call that returns the same thing. The location is
+# Rhode Island for the park list: small enough to be one quick request and large
+# enough to carry rows with and without optional fields.
+_FIXTURES = [
+    ("_MOCK_SPOTS", lambda c: c.spots()),
+    ("_MOCK_PARK_INFO", lambda c: c.park_info(KNOWN_PARK)),
+    ("_MOCK_PARK_STATS", lambda c: c.park_stats(KNOWN_PARK)),
+    ("_MOCK_USER_STATS", lambda c: c.user_stats(KNOWN_USER)),
+    ("_MOCK_SCHEDULED", lambda c: c.scheduled()),
+    ("_MOCK_LOCATION_PARKS", lambda c: c.location_parks("US-RI")),
+]
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("name,call", _FIXTURES, ids=[n for n, _ in _FIXTURES])
+def test_fixture_carries_no_field_the_api_does_not_send(client, name, call):
+    """POTA-L3-016: a fixture field POTA no longer sends is drift, and fails here.
+
+    This is the direction that makes a mock test lie: a fixture naming a field
+    the API does not send lets a tool read it in mock mode and find nothing in
+    real use.
+    """
+    from pota_mcp import client as mod
+
+    live = _fields(call(client))
+    if not live:
+        pytest.skip(f"{name}: the live endpoint returned nothing to compare against")
+    phantom = _fields(getattr(mod, name)) - live
+    # POTA has stopped sending these two. They stay in the fixture on purpose:
+    # they are what proves _USER_STATS_FIELDS drops them, and that proof has to
+    # still hold the day POTA sends them again.
+    if name == "_MOCK_USER_STATS":
+        phantom -= {"qth", "gravatar"}
+    assert not phantom, (
+        f"{name} carries {sorted(phantom)}, which the live endpoint does not send. "
+        "Recapture the fixture from the live response."
+    )
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("name,call", _FIXTURES, ids=[n for n, _ in _FIXTURES])
+def test_fixture_carries_every_field_the_api_sends(client, name, call):
+    """POTA-L3-017: a field POTA added that no fixture carries cannot be used.
+
+    Softer than the test above — a new field breaks nothing — but it is how a
+    field like `attempts` goes unnoticed until a tool needs it and has to build
+    its own feed to get at it.
+    """
+    from pota_mcp import client as mod
+
+    live = _fields(call(client))
+    if not live:
+        pytest.skip(f"{name}: the live endpoint returned nothing to compare against")
+    missing = live - _fields(getattr(mod, name))
+    # user_stats is projected deliberately: _USER_STATS_FIELDS drops qth and
+    # gravatar because this product does not republish personal details.
+    if name == "_MOCK_USER_STATS":
+        missing -= {"qth", "gravatar"}
+    assert not missing, (
+        f"The live endpoint sends {sorted(missing)}, which {name} does not carry. "
+        "Recapture the fixture so a tool can be written against the whole response."
+    )

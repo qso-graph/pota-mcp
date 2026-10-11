@@ -8,15 +8,15 @@ Test IDs: POTA-L2-001 through POTA-L2-045
 
 from __future__ import annotations
 
-import math
 import os
+from datetime import datetime, timezone
+
 import pytest
 
 # Enable mock mode before importing anything
 os.environ["POTA_MCP_MOCK"] = "1"
 
 from pota_mcp.client import POTAClient
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -176,7 +176,8 @@ class TestParkInfoTool:
     def test_park_fields(self, client):
         """POTA-L2-030: Park info has expected fields."""
         result = client.park_info("US-0001")
-        for field in ("name", "latitude", "longitude", "grid4", "parktypeDesc", "locationDesc"):
+        fields = ("name", "latitude", "longitude", "grid4", "parktypeDesc", "locationDesc")
+        for field in fields:
             assert field in result, f"Missing field: {field}"
 
 
@@ -224,8 +225,13 @@ class TestScheduledTool:
         """POTA-L2-035: Scheduled activations have expected fields."""
         result = client.scheduled()
         item = result[0]
-        for field in ("activator", "reference", "activityDate", "startTime"):
+        # POTA's own names, checked against the live endpoint (#32).
+        for field in ("activator", "reference", "startDate", "endDate",
+                      "startTime", "endTime", "scheduledActivitiesId", "comments"):
             assert field in item, f"Missing field: {field}"
+        # And none of the three this fixture used to invent.
+        for absent in ("activityDate", "comment", "scheduledActivationId"):
+            assert absent not in item, f"POTA does not send {absent}"
 
 
 class TestLocationParksTool:
@@ -341,3 +347,604 @@ class TestGetVersionInfo:
         for k in ("service_name", "service_version", "spec_version"):
             assert isinstance(result[k], str), f"{k} should be str, got {type(result[k])}"
             assert result[k], f"{k} should be non-empty"
+
+
+# ---------------------------------------------------------------------------
+# pota_scheduled filters (#20)
+# ---------------------------------------------------------------------------
+#
+# The helpers are tested directly with synthetic activations rather than
+# through the mock feed, which holds one item: the cases worth covering are a
+# park spanning two regions, a start time POTA did not give, and filters
+# combining, and none of those exists in a single-item fixture.
+
+import pota_mcp.server as srv  # noqa: E402
+from pota_mcp.client import _MOCK_PARK_ACTIVATIONS, regions, valid_reference  # noqa: E402
+
+
+def _item(**over):
+    """One schedule entry, shaped as POTA sends it (#32).
+
+    A date range plus a daily UTC window, `HH:MM` and not `HHMM`. What was
+    here before was `activityDate` and `1400`, neither of which POTA sends —
+    which is how the `within_hours` filter shipped unable to read a start time.
+    """
+    base = {
+        "activator": "N3VEM", "reference": "US-0058", "locationDesc": "US-VA",
+        "startDate": "2026-03-05", "endDate": "2026-03-05",
+        "startTime": "14:00", "endTime": "18:00",
+    }
+    base.update(over)
+    return base
+
+
+class TestScheduledFilterHelpers:
+    def test_regions_splits_a_park_that_spans_two(self):
+        """POTA-L2-046: locationDesc is comma-separated for a park on a border."""
+        assert regions(_item(locationDesc="US-VA,US-MD")) == ["US-VA", "US-MD"]
+        assert regions(_item(locationDesc="us-va")) == ["US-VA"]
+        assert regions(_item(locationDesc="")) == []
+        assert regions({}) == []
+
+    def test_regions_handles_the_worst_real_case(self):
+        """POTA-L2-063: the North Country Trail, US-4239, spans eight states.
+
+        Taken from the live spot feed on 2026-10-10, where five of 111 spots
+        carried more than one code (#27).
+        """
+        trail = _item(locationDesc="US-MI,US-MN,US-ND,US-NY,US-OH,US-PA,US-VT,US-WI")
+        assert len(regions(trail)) == 8
+        for state in ("US-MI", "US-OH", "US-WI"):
+            assert state in regions(trail)
+        # Whitespace around a code is POTA's to vary, not ours to depend on.
+        assert regions(_item(locationDesc=" US-VA , US-MD ")) == ["US-VA", "US-MD"]
+
+    def test_location_matches_either_region_of_a_border_park(self):
+        """POTA-L2-047: US-MD finds a park listed US-VA,US-MD.
+
+        pota_spots compares locationDesc for equality and so misses these;
+        that is reported separately rather than copied here.
+        """
+        both = _item(locationDesc="US-VA,US-MD")
+        assert srv._matches(both, "US-MD", "", "") is True
+        assert srv._matches(both, "us-md", "", "") is True
+        assert srv._matches(both, "US-ID", "", "") is False
+
+    def test_reference_and_activator_are_exact_and_case_insensitive(self):
+        """POTA-L2-048: a reference is a whole reference, not a prefix."""
+        i = _item()
+        assert srv._matches(i, "", "us-0058", "") is True
+        assert srv._matches(i, "", "US-005", "") is False   # not a prefix match
+        assert srv._matches(i, "", "", "n3vem") is True
+        assert srv._matches(i, "", "", "N3VE") is False
+
+    def test_filters_combine_with_and(self):
+        """POTA-L2-049: every filter given has to pass."""
+        i = _item()
+        assert srv._matches(i, "US-VA", "US-0058", "N3VEM") is True
+        assert srv._matches(i, "US-VA", "US-0058", "K4SWL") is False
+        assert srv._matches(i, "US-ID", "US-0058", "N3VEM") is False
+        # No filters passes everything, which is what an unfiltered call does.
+        assert srv._matches(i, "", "", "") is True
+
+    def test_start_time_is_read_as_utc(self):
+        """POTA-L2-050: startDate plus startTime, both UTC, `HH:MM` as sent.
+
+        This is the test that was wrong. It asserted `activityDate` and `1400`,
+        which no POTA response carries, so it passed while the code could not
+        read a single real entry (#32).
+        """
+        before = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        at = srv._starts_at(_item(startDate="2026-03-05", startTime="14:00"), now=before)
+        assert at is not None
+        assert (at.year, at.month, at.day, at.hour, at.minute) == (2026, 3, 5, 14, 0)
+        assert at.tzinfo is not None
+        # `HHMM` is accepted too, so a change back at POTA's end is not an outage.
+        assert srv._starts_at(_item(startTime="1400"), now=before) == at
+        early = srv._starts_at(_item(startTime="7:30"), now=before)
+        assert early is not None and (early.hour, early.minute) == (7, 30)
+
+    def test_a_standing_schedule_starts_again_each_day_in_its_range(self):
+        """POTA-L2-095: a POTA entry is a date range, not one date.
+
+        The live feed carries entries like startDate 2026-02-15, endDate
+        2026-10-10, startTime 20:25 — the same daily window over eight months.
+        Read as a single date, every one of those is in the past and no window
+        ever contains it.
+        """
+        standing = _item(startDate="2026-02-15", endDate="2026-10-10", startTime="20:25")
+        # Mid-range, before that day's window: today's occurrence.
+        at = srv._starts_at(standing, now=datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour, at.minute) == (6, 1, 20, 25)
+        # Mid-range, after it: tomorrow's.
+        at = srv._starts_at(standing, now=datetime(2026, 6, 1, 22, 0, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour, at.minute) == (6, 2, 20, 25)
+        # Past the end: the last occurrence, which no future window contains.
+        at = srv._starts_at(standing, now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour, at.minute) == (10, 10, 20, 25)
+
+    def test_a_missing_end_date_is_read_as_a_single_day(self):
+        """POTA-L2-096: the narrower reading, never a window POTA did not publish."""
+        one = _item(startDate="2026-03-05", endDate="", startTime="14:00")
+        at = srv._starts_at(one, now=datetime(2026, 3, 6, tzinfo=timezone.utc))
+        assert (at.month, at.day, at.hour) == (3, 5, 14)
+        # An end before the start is not a range either.
+        backwards = _item(startDate="2026-03-05", endDate="2026-03-01")
+        at = srv._starts_at(backwards, now=datetime(2026, 3, 6, tzinfo=timezone.utc))
+        assert (at.month, at.day) == (3, 5)
+
+    def test_an_unreadable_start_time_is_none_rather_than_a_guess(self):
+        """POTA-L2-051: what POTA did not say is not invented."""
+        for bad in ("", "  ", "99", "abcd", "24:60", "13:99", "12345", ":::"):
+            assert srv._starts_at(_item(startTime=bad)) is None, bad
+        assert srv._starts_at(_item(startDate="")) is None
+        assert srv._starts_at(_item(startDate="not-a-date")) is None
+        assert srv._starts_at({}) is None
+
+
+class TestScheduledToolFilters:
+    def test_no_filters_returns_exactly_what_it_always_did(self):
+        """POTA-L2-052: an unfiltered call is unchanged — no extra keys."""
+        result = srv.pota_scheduled()
+        assert sorted(result) == ["activations", "total"]
+        assert result["total"] == 1
+
+    def test_nulls_are_treated_as_no_filter(self):
+        """POTA-L2-053: llama.cpp/mcpo sends null for optional params (#1)."""
+        result = srv.pota_scheduled(location=None, reference=None, activator=None)
+        assert sorted(result) == ["activations", "total"]
+        assert result["total"] == 1
+
+    def test_a_filter_that_matches_says_what_was_asked(self):
+        """POTA-L2-054: the result carries the filters and the total before them."""
+        result = srv.pota_scheduled(activator="n3vem")
+        assert result["total"] == 1
+        assert result["filters"] == {"activator": "N3VEM"}
+        assert result["available"] == 1
+
+    def test_a_filter_that_matches_nothing_returns_an_empty_list(self):
+        """POTA-L2-055: empty is an answer, and still says what was asked."""
+        result = srv.pota_scheduled(location="US-ID")
+        assert result["total"] == 0 and result["activations"] == []
+        assert result["filters"] == {"location": "US-ID"}
+        assert result["available"] == 1
+
+    def test_a_time_window_excludes_a_date_in_the_past(self):
+        """POTA-L2-056: the fixture is scheduled for 2026-03-05, already past."""
+        result = srv.pota_scheduled(within_hours=24)
+        assert result["total"] == 0
+        assert result["filters"]["within_hours"] == 24
+        assert "start_time_unreadable" not in result
+
+    def test_an_absurd_window_does_not_raise(self):
+        """POTA-L2-057: inf raises inside timedelta and nan fails every
+        comparison, which would empty the list for no stated reason."""
+        for value in (float("inf"), float("nan"), -5):
+            result = srv.pota_scheduled(within_hours=value)
+            assert "error" not in result, value
+
+
+class TestScheduledWindowAgainstAFutureSchedule:
+    """The fixture feed is dated 2026-03-05 and so is always in the past.
+
+    Every window test above therefore proves exclusion. These supply a feed of
+    their own so inclusion — the path an operator actually uses — is proven
+    too, and so the unreadable count can be exercised at all.
+    """
+
+    @pytest.fixture
+    def feed(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        def at(hours):
+            when = datetime.now(timezone.utc) + timedelta(hours=hours)
+            return when.strftime("%Y-%m-%d"), when.strftime("%H:%M")
+
+        soon_date, soon_time = at(2)
+        later_date, later_time = at(30)
+        items = [
+            _item(activator="SOON", reference="US-0001",
+                  startDate=soon_date, endDate=soon_date, startTime=soon_time),
+            _item(activator="LATER", reference="US-0002",
+                  startDate=later_date, endDate=later_date, startTime=later_time),
+            _item(activator="NOTIME", reference="US-0003", startTime=""),
+        ]
+
+        class Feed:
+            def scheduled(self):
+                return list(items)
+
+        monkeypatch.setattr(srv, "_get_client", lambda: Feed())
+        return items
+
+    def test_a_window_keeps_what_starts_inside_it(self, feed):
+        """POTA-L2-058: four hours ahead finds the one two hours away."""
+        result = srv.pota_scheduled(within_hours=4)
+        assert [a["activator"] for a in result["activations"]] == ["SOON"]
+        assert result["available"] == 3
+
+    def test_a_wider_window_reaches_further(self, feed):
+        """POTA-L2-059: 48 hours finds both dated activations."""
+        result = srv.pota_scheduled(within_hours=48)
+        assert [a["activator"] for a in result["activations"]] == ["SOON", "LATER"]
+
+    def test_an_unreadable_start_is_counted_and_not_silently_dropped(self, feed):
+        """POTA-L2-060: an activation missing from a filtered list looks the
+        same as one that was never scheduled, so the count is reported."""
+        result = srv.pota_scheduled(within_hours=4)
+        assert result["start_time_unreadable"] == 1
+        assert "Omit within_hours" in result["start_time_unreadable_note"]
+
+    def test_without_a_window_nothing_is_dropped_for_a_missing_start(self, feed):
+        """POTA-L2-061: the start time only matters when a window is asked for."""
+        result = srv.pota_scheduled()
+        assert result["total"] == 3
+        assert "start_time_unreadable" not in result
+
+    def test_a_window_combines_with_a_text_filter(self, feed):
+        """POTA-L2-062: AND, and the unreadable count is about what was asked."""
+        result = srv.pota_scheduled(activator="SOON", within_hours=4)
+        assert result["total"] == 1
+        assert result["filters"] == {"activator": "SOON", "within_hours": 4}
+        # NOTIME was filtered out by activator before the window was applied,
+        # so it is not reported as unreadable here.
+        assert "start_time_unreadable" not in result
+
+
+class TestSpotsBorderParks:
+    """#27: filtering spots by location must find a park that spans regions.
+
+    `_MOCK_SPOTS` holds no border park and existing tests assert spot counts,
+    so a feed is injected here rather than the fixture perturbed.
+    """
+
+    @pytest.fixture
+    def feed(self, monkeypatch):
+        spots = [
+            {"activator": "K4SWL", "reference": "US-0062", "locationDesc": "US-NC",
+             "frequency": "14062", "mode": "CW"},
+            # The live worst case, 2026-10-10: eight states on one trail.
+            {"activator": "W8AAA", "reference": "US-4239", "mode": "SSB", "frequency": "14250",
+             "locationDesc": "US-MI,US-MN,US-ND,US-NY,US-OH,US-PA,US-VT,US-WI"},
+            {"activator": "JA1BBB", "reference": "JP-0123", "locationDesc": "JP-NN,JP-YN",
+             "frequency": "7030", "mode": "CW"},
+        ]
+        monkeypatch.setattr(POTAClient, "_get_json", lambda self, url: list(spots))
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        return spots
+
+    def test_a_middle_region_of_an_eight_state_park_is_found(self, feed):
+        """POTA-L2-064: US-OH is seventh of eight codes, not the whole field."""
+        found = POTAClient().spots(location="US-OH")
+        assert [s["reference"] for s in found] == ["US-4239"]
+
+    def test_the_first_and_last_region_are_found_too(self, feed):
+        """POTA-L2-065: not an off-by-one at either end of the split."""
+        assert [s["reference"] for s in POTAClient().spots(location="US-MI")] == ["US-4239"]
+        assert [s["reference"] for s in POTAClient().spots(location="US-WI")] == ["US-4239"]
+
+    def test_a_single_region_park_still_matches(self, feed):
+        """POTA-L2-066: the ordinary case is unchanged."""
+        assert [s["reference"] for s in POTAClient().spots(location="US-NC")] == ["US-0062"]
+
+    def test_a_lowercase_filter_matches(self, feed):
+        """POTA-L2-067: the filter side was already normalised; now both are."""
+        assert [s["reference"] for s in POTAClient().spots(location="us-oh")] == ["US-4239"]
+
+    def test_a_region_nobody_is_in_returns_nothing(self, feed):
+        """POTA-L2-068: not vacuous — the filter still excludes."""
+        assert POTAClient().spots(location="US-ID") == []
+
+    def test_no_filter_returns_every_spot(self, feed):
+        """POTA-L2-069: unfiltered behaviour is unchanged."""
+        assert len(POTAClient().spots()) == 3
+
+
+# ---------------------------------------------------------------------------
+# pota_park_activations (#17)
+# ---------------------------------------------------------------------------
+
+
+class TestReferenceValidation:
+    def test_real_reference_shapes_are_accepted(self):
+        """POTA-L2-070: POTA adds entities, and prefixes carry digits.
+
+        A pattern that enumerated prefixes would reject a real park the day a
+        new entity is added, so the prefix is loose and the shape is strict.
+        """
+        for ref in ("US-0062", "us-0062", " JP-0123 ", "CU-0332", "G-0001",
+                    "9A-0001", "3B8-0007", "4U1A-0001", "US-12345"):
+            assert valid_reference(ref) is True, ref
+
+    def test_what_is_not_a_reference_is_rejected(self):
+        """POTA-L2-071: including the shapes that would reach a URL."""
+        for bad in ("", "   ", "US", "0062", "US0062", "US-", "-0062", "US-ABCD",
+                    "../../etc/passwd", "US-0062/../x", "US 0062", "US-0062?count=1"):
+            assert valid_reference(bad) is False, bad
+
+
+class TestParkActivationsTool:
+    @pytest.fixture(autouse=True)
+    def fresh_server_client(self, monkeypatch):
+        """A client per test: see the note on the leaderboard tests. These
+        happen to use distinct references and so pass either way, which is a
+        property of the data rather than of the tests."""
+        monkeypatch.setattr(srv, "_client", None)
+
+    def test_returns_recent_activations(self):
+        """POTA-L2-072: reference, count and the rows."""
+        result = srv.pota_park_activations("US-0062")
+        assert result["reference"] == "US-0062"
+        assert result["count"] == len(result["activations"]) == 2
+        first = result["activations"][0]
+        fields = ("activeCallsign", "qso_date", "totalQSOs", "qsosCW", "qsosDATA", "qsosPHONE")
+        for field in fields:
+            assert field in first, field
+
+    def test_lowercase_reference_is_accepted(self):
+        """POTA-L2-073: the caller's case is not the caller's problem."""
+        assert srv.pota_park_activations("us-0062")["reference"] == "US-0062"
+
+    def test_count_is_bounded(self, monkeypatch):
+        """POTA-L2-074: 1 to 50, observed in the request POTA receives.
+
+        The first version of this asserted only that no error came back, which
+        passed with the clamp deleted — the mock feed returns its two rows
+        whatever is asked for. So the URL is captured instead: the clamp exists
+        to stop a caller asking POTA for everything, and the request is where
+        that is visible.
+        """
+        asked: list[str] = []
+
+        def record(self, url):
+            asked.append(url)
+            return list(_MOCK_PARK_ACTIVATIONS)
+
+        monkeypatch.setattr(POTAClient, "_get_json", record)
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+
+        srv.pota_park_activations("US-0062", count=9999)
+        srv.pota_park_activations("US-0063", count=0)
+        srv.pota_park_activations("US-0064", count=-5)
+        srv.pota_park_activations("US-0065", count=7)
+        assert [u.split("count=")[1] for u in asked] == ["50", "1", "1", "7"]
+
+    def test_count_is_clamped_in_what_comes_back_too(self):
+        """POTA-L2-078: below the floor returns a row, not an empty list.
+
+        A count of 0 or a negative slices the feed to nothing if it reaches it
+        unclamped, which looks like a park nobody has activated.
+        """
+        for count in (0, -5):
+            assert srv.pota_park_activations("US-0062", count=count)["count"] == 1
+
+    def test_null_count_is_the_default(self):
+        """POTA-L2-075: llama.cpp/mcpo sends null for optional params (#1)."""
+        assert srv.pota_park_activations("US-0062", count=None)["count"] == 2
+
+    def test_a_reference_that_is_not_one_is_refused_before_the_request(self):
+        """POTA-L2-076: POTA would answer 404, which says the park does not
+        exist — a different fact from "that is not a reference"."""
+        result = srv.pota_park_activations("../../etc/passwd")
+        assert "error" in result and "not a park reference" in result["error"]
+        assert "activations" not in result
+
+    def test_count_is_part_of_the_cache_key(self, client):
+        """POTA-L2-077: asking for more than was cached must not return the
+        shorter cached answer."""
+        assert len(client.park_activations("US-0062", count=1)) == 1
+        assert len(client.park_activations("US-0062", count=2)) == 2
+
+
+# ---------------------------------------------------------------------------
+# pota_park_leaderboard (#18)
+# ---------------------------------------------------------------------------
+
+
+class TestParkLeaderboardTool:
+    @pytest.fixture(autouse=True)
+    def fresh_server_client(self, monkeypatch):
+        """A client per test, because the cache outlives one.
+
+        `server._get_client()` returns a process-wide singleton and its cache
+        is keyed by park and limit, so a park another test has already fetched
+        is answered from cache and a patched `_get_json` is never called. Two
+        of the tests below passed on their own and failed in the suite for
+        exactly that reason.
+        """
+        monkeypatch.setattr(srv, "_client", None)
+
+    def test_returns_the_three_boards(self):
+        """POTA-L2-079: activations, activator QSOs, hunter QSOs."""
+        result = srv.pota_park_leaderboard("US-0062")
+        assert result["reference"] == "US-0062"
+        for board in ("activations", "activator_qsos", "hunter_qsos"):
+            assert board in result, board
+            assert result[board], board
+
+    def test_a_row_is_a_callsign_and_a_count_and_nothing_else(self):
+        """POTA-L2-080: the acceptance criterion, enforced rather than trusted.
+
+        POTA's user endpoint had to have `qth`, which can hold a street
+        address, and `gravatar`, a hash of an email address, stripped out of it
+        (#15). The shape is chosen here so a field POTA adds later is not
+        passed on because nobody noticed.
+        """
+        result = srv.pota_park_leaderboard("US-0062")
+        for board in POTAClient.LEADERBOARDS:
+            for row in result[board]:
+                assert set(row) == {"callsign", "count"}, row
+
+    def test_a_field_pota_adds_later_is_not_passed_on(self, monkeypatch):
+        """POTA-L2-081: the control for the test above — it has to actually
+        drop something, or it only proves POTA is tidy today."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [
+                    {"callsign": "K1ABC", "count": 4,
+                     "qth": "12 Mill Lane", "gravatar": "deadbeef"}
+                ],
+                "activator_qsos": [],
+                "hunter_qsos": [],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        result = srv.pota_park_leaderboard("US-0062")
+        assert result["activations"] == [{"callsign": "K1ABC", "count": 4}]
+        assert "qth" not in str(result) and "Mill Lane" not in str(result)
+
+    def test_a_board_pota_adds_later_is_not_passed_on_either(self, monkeypatch):
+        """POTA-L2-082: the boards are named, not read off the response."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [], "activator_qsos": [], "hunter_qsos": [],
+                "something_new": [{"callsign": "K1ABC", "count": 1}],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        assert "something_new" not in srv.pota_park_leaderboard("US-0062")
+
+    def test_rows_are_bounded_per_board(self, monkeypatch):
+        """POTA-L2-083: a board longer than asked for is cut."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [{"callsign": f"K{i}AAA", "count": i} for i in range(40)],
+                "activator_qsos": [], "hunter_qsos": [],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        assert len(srv.pota_park_leaderboard("US-0062", limit=3)["activations"]) == 3
+        # And the ceiling holds against an absurd request.
+        assert len(srv.pota_park_leaderboard("US-0063", limit=9999)["activations"]) == 25
+
+    def test_a_malformed_row_is_dropped_rather_than_returned_empty(self, monkeypatch):
+        """POTA-L2-084: a row with no callsign is not a row."""
+        monkeypatch.setattr(
+            POTAClient, "_get_json",
+            lambda self, url: {
+                "activations": [{"count": 3}, "nonsense", {"callsign": "", "count": 1},
+                                {"callsign": "K1ABC", "count": 2}],
+                "activator_qsos": [], "hunter_qsos": [],
+            },
+        )
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        assert srv.pota_park_leaderboard("US-0062")["activations"] == [
+            {"callsign": "K1ABC", "count": 2}
+        ]
+
+    def test_null_limit_is_the_default(self):
+        """POTA-L2-085: llama.cpp/mcpo sends null for optional params (#1)."""
+        assert "error" not in srv.pota_park_leaderboard("US-0062", limit=None)
+
+    def test_a_reference_that_is_not_one_is_refused(self):
+        """POTA-L2-086: validated before the request, as in #17."""
+        result = srv.pota_park_leaderboard("../../etc/passwd")
+        assert "error" in result and "not a park reference" in result["error"]
+        assert "activations" not in result
+
+
+# ---------------------------------------------------------------------------
+# pota_rare_parks_near (#19)
+# ---------------------------------------------------------------------------
+
+
+class TestRareParksNear:
+    """A feed of its own: the mock has two parks, both activated.
+
+    The case that matters is a rarely-activated park that is *not* among the
+    nearest, which is what decides whether the candidate list may be capped by
+    distance before it is sorted by activations.
+    """
+
+    @pytest.fixture(autouse=True)
+    def feed(self, monkeypatch):
+        monkeypatch.setattr(srv, "_client", None)
+        parks = [
+            # Nearest, and well activated.
+            {"reference": "US-0001", "name": "Close and busy", "latitude": 43.60,
+             "longitude": -116.00, "activations": 40, "attempts": 42, "qsos": 3000},
+            # Middling distance, middling count.
+            {"reference": "US-0002", "name": "Middle", "latitude": 43.40,
+             "longitude": -116.00, "activations": 5, "attempts": 5, "qsos": 200},
+            # Far, and never activated — the one an activator wants.
+            {"reference": "US-0003", "name": "Far and untouched", "latitude": 43.00,
+             "longitude": -116.00, "activations": 0, "attempts": 0, "qsos": 0},
+            # Far, tried and not finished: attempts but no activation.
+            {"reference": "US-0004", "name": "Tried and failed", "latitude": 43.05,
+             "longitude": -116.00, "activations": 0, "attempts": 3, "qsos": 14},
+            # Outside any radius used below.
+            {"reference": "US-0009", "name": "Another state away", "latitude": 20.0,
+             "longitude": -116.00, "activations": 0, "attempts": 0, "qsos": 0},
+        ]
+        monkeypatch.setattr(POTAClient, "_get_json", lambda self, url: list(parks))
+        monkeypatch.setattr("pota_mcp.client._is_mock", lambda: False)
+        return parks
+
+    def test_least_activated_first_then_nearest(self):
+        """POTA-L2-087: the order the question asks for."""
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200)
+        assert [p["reference"] for p in result["parks"]] == [
+            "US-0004",  # 0 activations, nearer of the two
+            "US-0003",  # 0 activations, further
+            "US-0002",  # 5
+            "US-0001",  # 40
+        ]
+
+    def test_a_rare_park_outside_the_nearest_few_is_still_found(self):
+        """POTA-L2-088: the reason the candidate list is not capped by distance.
+
+        Asking for one park must give the rarest in the radius, not the
+        nearest. A list already cut to the nearest would answer US-0001.
+        """
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200, limit=1)
+        assert [p["reference"] for p in result["parks"]] == ["US-0004"]
+
+    def test_never_activated_is_flagged_and_counted(self):
+        """POTA-L2-089: explicitly, per the acceptance criterion."""
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200)
+        flags = {p["reference"]: p["never_activated"] for p in result["parks"]}
+        assert flags == {"US-0004": True, "US-0003": True, "US-0002": False, "US-0001": False}
+        assert result["never_activated"] == 2
+
+    def test_attempts_come_through_so_tried_and_failed_is_visible(self):
+        """POTA-L2-090: never activated and never attempted are different
+        facts, and POTA already carries both."""
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=200)
+        by_ref = {p["reference"]: p for p in result["parks"]}
+        assert by_ref["US-0004"]["attempts"] == 3 and by_ref["US-0004"]["activations"] == 0
+        assert by_ref["US-0003"]["attempts"] == 0
+
+    def test_the_radius_excludes(self):
+        """POTA-L2-091: not vacuous — the radius really does cut the list.
+
+        Distances from the centre, measured: US-0001 2.0 km, US-0002 24.1 km,
+        US-0004 63.1 km, US-0003 68.6 km, US-0009 another state. So 30 km
+        keeps the first two and drops the never-activated pair — and of the
+        two kept, the less-activated comes first.
+        """
+        result = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=30)
+        assert [p["reference"] for p in result["parks"]] == ["US-0002", "US-0001"]
+        assert result["never_activated"] == 0
+
+    def test_a_radius_that_reaches_nothing_returns_nothing(self):
+        """POTA-L2-094: an empty answer, not an error and not everything."""
+        result = srv.pota_rare_parks_near("US-ID", 10.0, 10.0, radius_km=5)
+        assert result["total"] == 0 and result["parks"] == []
+        assert result["never_activated"] == 0
+
+    def test_limit_and_radius_are_clamped_and_nulls_are_defaults(self):
+        """POTA-L2-092: the #1 convention, and bounds that hold."""
+        null = srv.pota_rare_parks_near("US-ID", 43.617, -115.993, radius_km=None, limit=None)
+        assert null["radius_km"] == 50.0
+        absurd = srv.pota_rare_parks_near(
+            "US-ID", 43.617, -115.993, radius_km=99999, limit=9999)
+        assert absurd["radius_km"] == 500.0
+        assert len(absurd["parks"]) <= 100
+
+    def test_nearby_parks_still_sorts_by_distance(self):
+        """POTA-L2-093: the extraction must not have changed the other caller."""
+        nearest = POTAClient().nearby_parks("US-ID", 43.617, -116.00, radius_km=200, limit=3)
+        assert [p["reference"] for p in nearest] == ["US-0001", "US-0002", "US-0004"]
