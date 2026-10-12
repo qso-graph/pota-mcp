@@ -5,7 +5,15 @@ All notable changes to `pota-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-10-12
+
+**Upgrading:** a tool that fails now returns `isError: true` instead of a successful result whose
+payload contained an `error` key. Anything reading `result["error"]` should read the error flag.
+No decision changed, and the three kinds of refusal are now distinguishable rather than identical:
+a malformed park reference is refused before any request, a well-formed reference POTA holds no
+park for is a failed lookup, and a filter matching nothing is still a successful answer with an
+empty list.
+
 
 - **`certifi` is carried, and the outbound call verifies against it** (#38, qso-graph-devel#73).
   The fetch used `urllib` with no context, so it trusted whichever root store the running Python
