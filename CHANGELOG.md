@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **`certifi` is carried, and the outbound call verifies against it** (#38, qso-graph-devel#73).
+  The fetch used `urllib` with no context, so it trusted whichever root store the running Python
+  was built against. On macOS that is `/etc/ssl/cert.pem`, a deliberately *reduced* OpenSSL file —
+  128 roots against the system keychain's 158, and current rather than stale. A certificate
+  chaining to one of the 30 it omits fails for Python while `curl` to the same URL succeeds, and
+  the user is told only that the source could not be reached. That is what stopped `meteor-mcp`
+  reaching NASA. **`api.pota.app` verifies fine against the reduced file today**, so this was
+  latent rather than an outage: it would have surfaced the day a CA in the chain rotated.
+- **Verification is never disabled.** `ssl.CERT_NONE` or `check_hostname = False` would also have
+  made such a call "work", by accepting any certificate from anyone — a worse defect, and an
+  invisible one. The fix is a complete root set, not a relaxed check. Three static checks hold it
+  in `test_security.py` and two runtime ones in `test_tools.py`, split that way because the release
+  gate runs the first file with the package **not installed**.
+- **`tests/test_release_gate.py`** asserts that precondition rather than leaving it to be
+  remembered: the gate suite may import nothing but the standard library and pytest. solar-mcp's
+  0.3.0 publish failed on exactly that, from the same change.
+- `ssl.SSLError` is handled alongside `URLError`, so a trust failure is a clean message rather than
+  a traceback.
+
 - **Tool execution errors are flagged `isError`** (#39). Every tool returned `{"error": "..."}` on
   failure, which reaches a client as a *successful* call whose payload happens to contain the word
   "error". The specification says why that matters: otherwise "the LLM would not be able to see that
