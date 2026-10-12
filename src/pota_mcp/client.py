@@ -6,16 +6,47 @@ import json
 import math
 import os
 import re
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from functools import cache
 from typing import Any
+
+import certifi
 
 from . import __version__
 
 _BASE = "https://api.pota.app"
+
+
+@cache
+def _context() -> ssl.SSLContext:
+    """A verifying context with a current root set. Built once.
+
+    The roots come from ``certifi`` rather than whichever store the running
+    Python was built against. On macOS that distinction is real: Apple ships
+    ``/etc/ssl/cert.pem`` for OpenSSL — and therefore for Python — as a
+    deliberately *reduced* file, 128 roots against the system keychain's 158.
+    It is current, not stale. But a certificate chaining to one of the 30 it
+    omits fails for Python while ``curl`` to the same URL succeeds, and the
+    user is told only that the source could not be reached
+    (qso-graph-devel#73, found when meteor-mcp could not reach NASA at all).
+
+    api.pota.app verifies fine against the reduced file today, so this is a
+    latent defect rather than an outage: the day any CA in the chain rotates to
+    a root Apple omits, this server stops working on macOS with no hint that
+    trust is the cause.
+
+    Verification is never disabled. ``ssl.CERT_NONE`` or ``check_hostname =
+    False`` would also make a call "work", by accepting any certificate from
+    anyone — a worse defect than this one, and an invisible one. The fix is a
+    complete root set, not a relaxed check.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
 
 # Cache TTLs
 _SPOTS_TTL = 60.0  # 1 minute
@@ -345,9 +376,9 @@ class POTAClient:
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", f"pota-mcp/{__version__}")
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=_context()) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
-        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+        except (urllib.error.URLError, urllib.error.HTTPError, ssl.SSLError) as e:
             # Named, because since #39 this message is what the client sees as
             # the tool's error. urllib's own text is "<urlopen error [Errno 61]
             # Connection refused>", which does not say what was being reached,

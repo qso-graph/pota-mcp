@@ -964,3 +964,34 @@ class TestRareParksNear:
         """POTA-L2-093: the extraction must not have changed the other caller."""
         nearest = POTAClient().nearby_parks("US-ID", 43.617, -116.00, radius_km=200, limit=3)
         assert [p["reference"] for p in nearest] == ["US-0001", "US-0002", "US-0004"]
+
+
+class TestTlsAtRuntime:
+    """What the built context actually is.
+
+    `test_security.py` reads the source for this, because the release gate runs
+    that file with the package not installed. These assertions need the real
+    object, so they live here. Follows `meteor-mcp`, which put the same test
+    beside its tools.
+    """
+
+    def test_verification_is_on(self):
+        """POTA-L2-090: CERT_REQUIRED, and the hostname is checked."""
+        import ssl
+
+        from pota_mcp.client import _context
+
+        context = _context()
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+
+    def test_the_root_store_actually_loaded(self):
+        """POTA-L2-091: an empty store fails closed and looks like an outage.
+
+        The symptom this change exists to end is "the source could not be
+        reached" with no hint that trust is the cause, and a context carrying no
+        roots would reproduce it exactly.
+        """
+        from pota_mcp.client import _context
+
+        assert _context().cert_store_stats()["x509_ca"] > 100
