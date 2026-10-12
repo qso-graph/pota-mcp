@@ -5,6 +5,60 @@ All notable changes to `pota-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-10-12
+
+**Upgrading:** a tool that fails now returns `isError: true` instead of a successful result whose
+payload contained an `error` key. Anything reading `result["error"]` should read the error flag.
+No decision changed, and the three kinds of refusal are now distinguishable rather than identical:
+a malformed park reference is refused before any request, a well-formed reference POTA holds no
+park for is a failed lookup, and a filter matching nothing is still a successful answer with an
+empty list.
+
+
+- **`certifi` is carried, and the outbound call verifies against it** (#38, qso-graph-devel#73).
+  The fetch used `urllib` with no context, so it trusted whichever root store the running Python
+  was built against. On macOS that is `/etc/ssl/cert.pem`, a deliberately *reduced* OpenSSL file —
+  128 roots against the system keychain's 158, and current rather than stale. A certificate
+  chaining to one of the 30 it omits fails for Python while `curl` to the same URL succeeds, and
+  the user is told only that the source could not be reached. That is what stopped `meteor-mcp`
+  reaching NASA. **`api.pota.app` verifies fine against the reduced file today**, so this was
+  latent rather than an outage: it would have surfaced the day a CA in the chain rotated.
+- **Verification is never disabled.** `ssl.CERT_NONE` or `check_hostname = False` would also have
+  made such a call "work", by accepting any certificate from anyone — a worse defect, and an
+  invisible one. The fix is a complete root set, not a relaxed check. Three static checks hold it
+  in `test_security.py` and two runtime ones in `test_tools.py`, split that way because the release
+  gate runs the first file with the package **not installed**.
+- **`tests/test_release_gate.py`** asserts that precondition rather than leaving it to be
+  remembered: the gate suite may import nothing but the standard library and pytest. solar-mcp's
+  0.3.0 publish failed on exactly that, from the same change.
+- `ssl.SSLError` is handled alongside `URLError`, so a trust failure is a clean message rather than
+  a traceback.
+
+- **Tool execution errors are flagged `isError`** (#39). Every tool returned `{"error": "..."}` on
+  failure, which reaches a client as a *successful* call whose payload happens to contain the word
+  "error". The specification says why that matters: otherwise "the LLM would not be able to see that
+  an error occurred and self-correct". They now raise `ToolError`, which `fastmcp` reports as
+  `isError: true` with the message intact. **No decision changed — only how it is reported.** The
+  three kinds of refusal are unchanged and now distinguishable: a malformed reference is refused
+  before any request, a well-formed reference POTA holds no park for is a failed lookup, and a
+  filter matching nothing is still a successful answer with an empty list.
+- **Every tool declares all four annotation hints** (#39). Declaring nothing is not neutral: the
+  defaults advertise a tool as `destructiveHint: true`, `openWorldHint: true` and not idempotent,
+  and the specification tells clients to keep a human in the loop for operations like that — so a
+  client was entitled to put a confirmation prompt in front of looking up a park. All eleven are
+  read-only, non-destructive and idempotent; `openWorldHint` is read per tool, true for the ten
+  that reach `api.pota.app` and false for `get_version_info`, which reports what the wheel carries.
+  Annotations are a client's UX hint and never a security control; they replace no validation here.
+- **A failed fetch now names what it could not reach.** Since the message is what a client now
+  sees, `<urlopen error [Errno 61] Connection refused>` was not enough to tell a POTA outage from a
+  defect here. It raises `POTA API request failed (<url>): <reason>`.
+- **Reference validation moved above each tool's `try`.** It was raised inside it, where the
+  generic handler would have re-wrapped it. The message would have survived — a `ToolError`'s `str`
+  is its message, checked — but relying on that coincidence is worse than not nesting.
+- **`tests/test_mcp_conformance.py`** asserts all of the above, so none of it can regress silently,
+  following `adif-mcp`'s file of the same name.
+- `urllib.error` is imported rather than relied on as a side effect of importing `urllib.request`.
+
 ## [0.3.0] — 2026-10-11
 
 - **ruff and mypy run in CI** (qso-graph-devel#66), as a job the `ci-all-green` gate requires.

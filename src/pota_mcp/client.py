@@ -6,15 +6,47 @@ import json
 import math
 import os
 import re
+import ssl
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from functools import cache
 from typing import Any
+
+import certifi
 
 from . import __version__
 
 _BASE = "https://api.pota.app"
+
+
+@cache
+def _context() -> ssl.SSLContext:
+    """A verifying context with a current root set. Built once.
+
+    The roots come from ``certifi`` rather than whichever store the running
+    Python was built against. On macOS that distinction is real: Apple ships
+    ``/etc/ssl/cert.pem`` for OpenSSL — and therefore for Python — as a
+    deliberately *reduced* file, 128 roots against the system keychain's 158.
+    It is current, not stale. But a certificate chaining to one of the 30 it
+    omits fails for Python while ``curl`` to the same URL succeeds, and the
+    user is told only that the source could not be reached
+    (qso-graph-devel#73, found when meteor-mcp could not reach NASA at all).
+
+    api.pota.app verifies fine against the reduced file today, so this is a
+    latent defect rather than an outage: the day any CA in the chain rotates to
+    a root Apple omits, this server stops working on macOS with no hint that
+    trust is the cause.
+
+    Verification is never disabled. ``ssl.CERT_NONE`` or ``check_hostname =
+    False`` would also make a call "work", by accepting any certificate from
+    anyone — a worse defect than this one, and an invisible one. The fix is a
+    complete root set, not a relaxed check.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
 
 # Cache TTLs
 _SPOTS_TTL = 60.0  # 1 minute
@@ -343,8 +375,15 @@ class POTAClient:
         self._rate_limit()
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", f"pota-mcp/{__version__}")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
+        try:
+            with urllib.request.urlopen(req, timeout=15, context=_context()) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, urllib.error.HTTPError, ssl.SSLError) as e:
+            # Named, because since #39 this message is what the client sees as
+            # the tool's error. urllib's own text is "<urlopen error [Errno 61]
+            # Connection refused>", which does not say what was being reached,
+            # so a model reading it cannot tell a POTA outage from a bug here.
+            raise RuntimeError(f"POTA API request failed ({url}): {e}") from e
         if not body or body.strip() == "":
             return None
         return json.loads(body)
@@ -417,7 +456,12 @@ class POTAClient:
             data = self._get_json(f"{_BASE}/park/{urllib.parse.quote(ref)}")
 
         if not data:
-            return {"reference": ref, "error": "Not found"}
+            # Raised, not returned: this was always a failure, said in a payload
+            # the protocol could not see. A caller cannot tell "no such park"
+            # from "here are the park's details" when both arrive as success.
+            raise LookupError(
+                f"POTA has no park {ref}. References look like US-0062."
+            )
 
         self._cache_set(key, data, _PARK_TTL)
         return data
@@ -436,7 +480,12 @@ class POTAClient:
             data = self._get_json(f"{_BASE}/park/stats/{urllib.parse.quote(ref)}")
 
         if not data:
-            return {"reference": ref, "error": "Not found"}
+            # Raised, not returned: this was always a failure, said in a payload
+            # the protocol could not see. A caller cannot tell "no such park"
+            # from "here are the park's details" when both arrive as success.
+            raise LookupError(
+                f"POTA has no park {ref}. References look like US-0062."
+            )
 
         self._cache_set(key, data, _STATS_TTL)
         return data
@@ -518,7 +567,10 @@ class POTAClient:
             data = self._get_json(f"{_BASE}/stats/user/{urllib.parse.quote(call)}")
 
         if not data:
-            return {"callsign": call, "error": "Not found"}
+            # As above. POTA holding no record for a callsign is not the same
+            # answer as that operator having zero activations, and the old shape
+            # could not express the difference either.
+            raise LookupError(f"POTA has no record for {call}.")
 
         data = {k: data[k] for k in _USER_STATS_FIELDS if k in data}
         self._cache_set(key, data, _STATS_TTL)
