@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from . import __spec_version__, __version__
 from .client import POTAClient, regions, valid_reference
@@ -36,6 +37,50 @@ def _get_client() -> POTAClient:
 # Tools
 # ---------------------------------------------------------------------------
 
+# MCP 2026-07-28 tool annotations. The defaults are pessimistic — a tool that
+# declares nothing is advertised as destructive, non-idempotent and open-world,
+# and the specification tells a client to keep a human in the loop for an
+# operation like that. So a client would be entitled to put a confirmation
+# prompt in front of looking up a park. Every tool here reads and none writes,
+# so the three effect hints are the same for all of them; only openWorldHint
+# differs, and it is read per tool.
+#
+# They are a client's UX hint and never a security control: the specification
+# requires clients to treat them as untrusted, so none of this replaces the
+# reference and callsign validation below.
+_READS_POTA = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    # Reaches api.pota.app, which is outside this host.
+    "openWorldHint": True,
+}
+_ANSWERS_FROM_THE_PACKAGE = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    # Reports versions carried in the wheel. It opens no connection.
+    "openWorldHint": False,
+}
+
+
+def _park_reference(reference: str) -> str:
+    """POTA's own reference format, checked before anything is sent.
+
+    Said rather than passed on: POTA would answer 404 and the caller would be
+    told the park does not exist, which is a different fact from the reference
+    being malformed.
+
+    Raised outside each tool's ``try`` so the generic handler there cannot
+    re-wrap it. The message would survive that — a ToolError's ``str`` is its
+    message — but relying on the coincidence would be worse than not nesting.
+    """
+    ref = reference.strip().upper()
+    if not valid_reference(ref):
+        raise ToolError(f"{reference!r} is not a park reference. They look like US-0062.")
+    return ref
+
+
 
 def _version_info_payload() -> dict[str, Any]:
     """Build the version info envelope. Pulled into a helper so tests can
@@ -47,7 +92,7 @@ def _version_info_payload() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_ANSWERS_FROM_THE_PACKAGE)
 def get_version_info() -> dict[str, Any]:
     """Get pota-mcp service version and upstream spec version.
 
@@ -63,7 +108,7 @@ def get_version_info() -> dict[str, Any]:
     return _version_info_payload()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_spots(
     band: str | None = "",
     mode: str | None = "",
@@ -98,10 +143,10 @@ def pota_spots(
         )
         return {"total": len(spots), "spots": spots}
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_park_info(reference: str) -> dict[str, Any]:
     """Get detailed park information by POTA reference code.
 
@@ -115,10 +160,10 @@ def pota_park_info(reference: str) -> dict[str, Any]:
     try:
         return _get_client().park_info(reference)
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_park_stats(reference: str) -> dict[str, Any]:
     """Get activation and QSO counts for a POTA park.
 
@@ -131,10 +176,10 @@ def pota_park_stats(reference: str) -> dict[str, Any]:
     try:
         return _get_client().park_stats(reference)
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_park_activations(reference: str, count: int | None = 10) -> dict[str, Any]:
     """List recent activations of a POTA park, most recent first.
 
@@ -148,22 +193,18 @@ def pota_park_activations(reference: str, count: int | None = 10) -> dict[str, A
         Each activation's callsign, date, total QSOs and the CW, data and phone
         counts, with the park reference and how many were returned.
     """
+    ref = _park_reference(reference)
     try:
         # Coerce None → default (llama.cpp/mcpo sends null for optional params, #1)
         count = count if count is not None else 10
         count = min(max(int(count), 1), 50)
-        ref = reference.strip().upper()
-        if not valid_reference(ref):
-            # Said rather than passed on: POTA would answer 404 and the caller
-            # would be told the park does not exist, which is a different fact.
-            return {"error": f"{reference!r} is not a park reference. They look like US-0062."}
         activations = _get_client().park_activations(ref, count=count)
         return {"reference": ref, "count": len(activations), "activations": activations}
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_park_leaderboard(reference: str, limit: int | None = 10) -> dict[str, Any]:
     """Top activators and hunters of a POTA park.
 
@@ -178,20 +219,18 @@ def pota_park_leaderboard(reference: str, limit: int | None = 10) -> dict[str, A
     Returns:
         The park reference and the three boards.
     """
+    ref = _park_reference(reference)
     try:
         # Coerce None → default (llama.cpp/mcpo sends null for optional params, #1)
         limit = limit if limit is not None else 10
         limit = min(max(int(limit), 1), 25)
-        ref = reference.strip().upper()
-        if not valid_reference(ref):
-            return {"error": f"{reference!r} is not a park reference. They look like US-0062."}
         boards = _get_client().park_leaderboard(ref, limit=limit)
         return {"reference": ref, **boards}
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_user_stats(callsign: str) -> dict[str, Any]:
     """Get POTA activator and hunter statistics for a callsign.
 
@@ -205,7 +244,7 @@ def pota_user_stats(callsign: str) -> dict[str, Any]:
     try:
         return _get_client().user_stats(callsign)
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +345,7 @@ def _matches(
     return True
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_scheduled(
     location: str | None = "",
     reference: str | None = "",
@@ -399,10 +438,10 @@ def pota_scheduled(
                 )
         return result
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_location_parks(location: str) -> dict[str, Any]:
     """List all POTA parks in a state, province, or country.
 
@@ -417,10 +456,10 @@ def pota_location_parks(location: str) -> dict[str, Any]:
         parks = _get_client().location_parks(location)
         return {"location": location.upper(), "total": len(parks), "parks": parks}
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_nearby_parks(
     location: str,
     latitude: float,
@@ -464,10 +503,10 @@ def pota_nearby_parks(
             "parks": parks,
         }
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READS_POTA)
 def pota_rare_parks_near(
     location: str,
     latitude: float,
@@ -517,7 +556,7 @@ def pota_rare_parks_near(
             "parks": parks,
         }
     except Exception as e:
-        return {"error": str(e)}
+        raise ToolError(str(e)) from e
 
 
 # ---------------------------------------------------------------------------

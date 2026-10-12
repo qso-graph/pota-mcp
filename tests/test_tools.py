@@ -1,4 +1,4 @@
-"""L2 unit tests for pota-mcp — all 7 tools + helper functions.
+"""L2 unit tests for pota-mcp — all 11 tools + helper functions.
 
 Uses POTA_MCP_MOCK=1 for tool-level tests (no POTA API calls).
 Direct unit tests on POTAClient helper methods.
@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timezone
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 # Enable mock mode before importing anything
 os.environ["POTA_MCP_MOCK"] = "1"
@@ -722,12 +723,21 @@ class TestParkActivationsTool:
         """POTA-L2-075: llama.cpp/mcpo sends null for optional params (#1)."""
         assert srv.pota_park_activations("US-0062", count=None)["count"] == 2
 
-    def test_a_reference_that_is_not_one_is_refused_before_the_request(self):
+    def test_a_reference_that_is_not_one_is_refused_before_the_request(self, monkeypatch):
         """POTA-L2-076: POTA would answer 404, which says the park does not
-        exist — a different fact from "that is not a reference"."""
-        result = srv.pota_park_activations("../../etc/passwd")
-        assert "error" in result and "not a park reference" in result["error"]
-        assert "activations" not in result
+        exist — a different fact from "that is not a reference".
+
+        The refusal is unchanged; since #39 it is flagged rather than returned
+        as a successful result carrying an "error" key. "Before the request" is
+        asserted rather than implied: the client is replaced by one that fails
+        if it is reached at all.
+        """
+        def never(*_args, **_kwargs):
+            raise AssertionError("the request was sent despite a bad reference")
+
+        monkeypatch.setattr(srv, "_get_client", never)
+        with pytest.raises(ToolError, match="not a park reference"):
+            srv.pota_park_activations("../../etc/passwd")
 
     def test_count_is_part_of_the_cache_key(self, client):
         """POTA-L2-077: asking for more than was cached must not return the
@@ -839,11 +849,17 @@ class TestParkLeaderboardTool:
         """POTA-L2-085: llama.cpp/mcpo sends null for optional params (#1)."""
         assert "error" not in srv.pota_park_leaderboard("US-0062", limit=None)
 
-    def test_a_reference_that_is_not_one_is_refused(self):
-        """POTA-L2-086: validated before the request, as in #17."""
-        result = srv.pota_park_leaderboard("../../etc/passwd")
-        assert "error" in result and "not a park reference" in result["error"]
-        assert "activations" not in result
+    def test_a_reference_that_is_not_one_is_refused(self, monkeypatch):
+        """POTA-L2-086: validated before the request, as in #17.
+
+        Flagged rather than returned since #39; the decision is the same one.
+        """
+        def never(*_args, **_kwargs):
+            raise AssertionError("the request was sent despite a bad reference")
+
+        monkeypatch.setattr(srv, "_get_client", never)
+        with pytest.raises(ToolError, match="not a park reference"):
+            srv.pota_park_leaderboard("../../etc/passwd")
 
 
 # ---------------------------------------------------------------------------
