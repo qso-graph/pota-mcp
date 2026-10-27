@@ -48,15 +48,64 @@ def _context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=certifi.where())
 
 
-# Cache TTLs
-_SPOTS_TTL = 60.0  # 1 minute
-_PARK_TTL = 86400.0  # 24 hours
-_STATS_TTL = 3600.0  # 1 hour
-_SCHEDULED_TTL = 300.0  # 5 minutes
-_LOCATION_TTL = 3600.0  # 1 hour
+# How stale an answer may be before POTA is asked again. This is the limit that
+# decides how many requests a day this server can possibly cause, so it is the
+# one that protects POTA from us; _MIN_DELAY below only shapes a burst.
+#
+# POTA states no request limit, so these are judgement, recorded here so they
+# can be revisited. They are the same figures QG Desktop uses -- see
+# qso-graph-devel/planning/MCP-SECURITY-FRAMEWORK.md, "Refresh floors" -- and
+# each follows how fast the underlying data actually changes:
+_SPOTS_TTL = 60.0  # 1 min   -- a live spot is worthless stale
+_PARK_TTL = 86400.0  # 24 h  -- a park's name, grid and program do not move
+_STATS_TTL = 86400.0  # 24 h -- counts move when logs are uploaded, in batches
+_SCHEDULED_TTL = 300.0  # 5 min -- activators add and cancel through the day
+_LOCATION_TTL = 86400.0  # 24 h -- the park list for a state changes weekly
 
-# Rate limiting: 100ms minimum between requests
+# The gap between two consecutive calls, which is a different thing from the
+# floors above: it stops one tool call that fans out over parks from arriving as
+# a burst. api.pota.app is a commercial API answering in tens of milliseconds,
+# so 100 ms rather than the 0.2 s used against volunteer-run services.
 _MIN_DELAY = 0.1
+
+# What to do when POTA says stop. A 429 carrying Retry-After is the provider
+# stating its limit outright, so it is honoured -- but this server answers a
+# synchronous tool call, so it never sleeps through the wait: it blocks further
+# calls, serves the stale cache entry if it has one, and otherwise says how long
+# to wait. Bounds, not the provider's word verbatim: a header asking for a day
+# would break an interactive tool.
+_MIN_BACKOFF = 60.0
+_MAX_BACKOFF = 3600.0
+
+
+class RateLimited(RuntimeError):
+    """POTA asked us to stop. The message is safe to show a user.
+
+    A RuntimeError subclass so that callers which already handle this client's
+    failures keep working, and so FastMCP flags the tool result isError either
+    way.
+    """
+
+    def __init__(self, wait: float) -> None:
+        self.retry_after = max(1, round(wait))
+        super().__init__(
+            "POTA is rate limiting this client; try again in "
+            f"{self.retry_after} s"
+        )
+
+
+def _retry_after(header: str | None) -> float:
+    """Seconds to wait, from a Retry-After header, clamped to our bounds.
+
+    Retry-After may also be an HTTP date; that form is not parsed, and falls
+    back to the floor rather than guessing, because a wrong parse here would
+    either hammer POTA or strand the user.
+    """
+    try:
+        seconds = float(header) if header else 0.0
+    except ValueError:
+        seconds = 0.0
+    return min(max(seconds, _MIN_BACKOFF), _MAX_BACKOFF)
 
 
 def _is_mock() -> bool:
@@ -339,6 +388,9 @@ class POTAClient:
         self._lock = threading.Lock()
         self._last_request: float = 0.0
         self._cache: dict[str, tuple[float, Any]] = {}
+        # Set by a 429: no call goes out before this. Shared by every endpoint,
+        # because the limit is POTA's view of this client, not of one path.
+        self._blocked_until: float = 0.0
 
     # ------------------------------------------------------------------
     # Cache
@@ -372,13 +424,32 @@ class POTAClient:
 
     def _get_json(self, url: str) -> Any:
         """HTTP GET, return parsed JSON."""
+        with self._lock:
+            remaining = self._blocked_until - time.monotonic()
+        if remaining > 0:
+            # Still inside a wait POTA asked for. Refusing here is the point:
+            # the alternative is sending the request it told us not to send.
+            raise RateLimited(remaining)
         self._rate_limit()
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", f"pota-mcp/{__version__}")
         try:
             with urllib.request.urlopen(req, timeout=15, context=_context()) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
-        except (urllib.error.URLError, urllib.error.HTTPError, ssl.SSLError) as e:
+        except urllib.error.HTTPError as e:
+            # A 429 carrying Retry-After is POTA stating its limit outright, so
+            # it is honoured -- but this is a synchronous tool call, so we block
+            # further calls and tell the user how long rather than sleeping
+            # through it. 503 is included only when it carries the header,
+            # which is a provider shedding load deliberately; a bare 503 is an
+            # outage and falls through to the message below.
+            if e.code == 429 or (e.code == 503 and e.headers.get("Retry-After")):
+                wait = _retry_after(e.headers.get("Retry-After"))
+                with self._lock:
+                    self._blocked_until = time.monotonic() + wait
+                raise RateLimited(wait) from e
+            raise RuntimeError(f"POTA API request failed ({url}): {e}") from e
+        except (urllib.error.URLError, ssl.SSLError) as e:
             # Named, because since #39 this message is what the client sees as
             # the tool's error. urllib's own text is "<urlopen error [Errno 61]
             # Connection refused>", which does not say what was being reached,
