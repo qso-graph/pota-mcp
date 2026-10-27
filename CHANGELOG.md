@@ -5,9 +5,35 @@ All notable changes to `pota-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The park, location and statistics caches now hold for 24 hours** rather than
+  one hour. POTA states no request limit, so these are judgement — and the data
+  does not move faster than that: a park's list for a state changes weekly, and
+  activation counts move when logs are uploaded, in batches. The figures are now
+  the same ones QG Desktop uses, reconciled resource by resource, so a park
+  looked up in the desktop app and through this server are asked for at the same
+  rate. Spot and scheduled-activation caches are unchanged at 1 and 5 minutes.
+
+### Added
+
+- **A `429` from POTA is now honoured.** POTA asking this client to stop is the
+  most explicit form a request limit takes, and it was previously ignored:
+  the error was reported and the next tool call sent another request. Now the
+  `Retry-After` interval is read and bounded, no further call goes out until it
+  has passed, and the tool says how long to wait. It does not sleep through the
+  wait — a tool call is synchronous and an hour's sleep inside one is a hang, so
+  it refuses quickly and says when to come back. A `503` is treated as an outage
+  unless it carries `Retry-After`, in which case it is a deliberate shed and
+  honoured the same way.
+
 ## [0.6.0] — 2026-10-26
 
-
+Republishes 0.5.0 unchanged. 0.5.0 reached PyPI but its release run did not
+finish, so no `v0.5.0` tag exists and the version could not be reused; the
+content is the Python 3.11 floor described below.
 
 ## [0.5.0] — 2026-10-26
 
