@@ -4,9 +4,9 @@
 [![PyPI](https://img.shields.io/pypi/v/pota-mcp?label=PyPI&color=blue)](https://pypi.org/project/pota-mcp/)
 [![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%3Fsearch%3Dio.github.qso-graph%2Fpota-mcp%26version%3Dlatest&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry&color=blue)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.qso-graph/pota-mcp&version=latest)
 
-MCP server for [Parks on the Air (POTA)](https://pota.app/) — live activator spots, park info, activator/hunter stats, and scheduled activations through any MCP-compatible AI assistant.
+MCP server for [Parks on the Air (POTA)](https://pota.app/)—live activator spots, park info, activator/hunter stats, and scheduled activations through any MCP-compatible AI assistant.
 
-Part of the [qso-graph](https://qso-graph.io/) project. **No authentication required** — all POTA endpoints are public.
+Part of the [qso-graph](https://qso-graph.io/) project. **No authentication required**—all POTA endpoints are public.
 
 ## Install
 
@@ -21,22 +21,22 @@ uvx pota-mcp            # run it; nothing to install
 | `pota_spots` | Current activator spots with park/grid enrichment and optional filters |
 | `pota_park_info` | Park details by reference code (name, grid, type, agencies, website) |
 | `pota_park_stats` | Activation and QSO counts for a park |
-| `pota_park_activations` | A park's recent activations — who, when, and QSOs by mode |
+| `pota_park_activations` | A park's recent activations—who, when, and QSOs by mode |
 | `pota_park_leaderboard` | A park's top activators, activator QSOs and hunter QSOs |
 | `pota_user_stats` | Activator/hunter stats by callsign (callsign, name, activator, attempts, hunter, awards, endorsements; no address or email-derived fields) |
 | `pota_scheduled` | Upcoming scheduled activations, with optional location, park, activator and time-window filters |
 | `pota_location_parks` | All parks in a state/province/country |
-| `pota_nearby_parks` | Find parks near a point — great for 2-fer planning |
+| `pota_nearby_parks` | Find parks near a point—great for 2-fer planning |
 | `pota_rare_parks_near` | Parks near a point that are rarely or never activated |
 | `get_version_info` | Service version + upstream spec version (fleet identity attestation) |
 
 ## Quick Start
 
-No credentials needed — just install and configure your MCP client.
+No credentials needed—just install and configure your MCP client.
 
 ### Configure your MCP client
 
-pota-mcp works with any MCP-compatible client. Add the server config and restart — tools appear automatically.
+pota-mcp works with any MCP-compatible client. Add the server config and restart—tools appear automatically.
 
 #### Claude Desktop
 
@@ -130,7 +130,7 @@ Add to `~/.gemini/settings.json` (global) or `.gemini/settings.json` (project):
 
 > "What POTA activations are happening right now?"
 
-> "Tell me about park US-0001 — how many activations has it had?"
+> "Tell me about park US-0001—how many activations has it had?"
 
 > "What are K4SWL's POTA stats?"
 
